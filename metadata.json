@@ -1,0 +1,6 @@
+{
+  "name": "GT Wifi Analyzer",
+  "description": "WiFi ও নেটওয়ার্ক ডায়াগনস্টিক টুল - লাইভ পিং, সিগন্যাল মনিটর, গেমিং লেটেন্সি, ডিএনএস টেস্ট, স্পিড টেস্ট এবং নেটওয়ার্ক ডায়াগনস্টিক টপোলজি।",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
