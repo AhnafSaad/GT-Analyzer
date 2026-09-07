@@ -25,8 +25,8 @@ object Translations {
         "latency" to mapOf(AppLanguage.BN to "লেটেন্সি", AppLanguage.EN to "Latency"),
         "diagnosticInfo" to mapOf(AppLanguage.BN to "এই তথ্য কীভাবে কাজ করে?", AppLanguage.EN to "How does this work?"),
         "diagnosticExplain" to mapOf(
-            AppLanguage.BN to "Traceroute প্রযুক্তি TTL (Time To Live) ব্যবহার করে প্রতিটি রাউটারের আইপি বের করে। Gateway 1 হলো হোম রাউটার, এবং Gateway 2 হলো আইএসপির কোর রাউটার।",
-            AppLanguage.EN to "Traceroute uses TTL (Time To Live) to discover each router's IP on the path. Gateway 1 is your local home router and Gateway 2 is your ISP upstream core router."
+            AppLanguage.BN to "ট্রেসরুট ও পিং প্রটোকল ব্যবহার করে নেটওয়ার্ক পাথ বিশ্লেষণ করা হয়। Gateway 1 হলো লোকাল হোম রাউটার। WAN বা আইএসপি গেটওয়ে নিশ্চিত না হলে 'Unknown' দেখানো হয় এবং ট্রেসরুটকে কেবল পাথ অ্যানালাইসিসের জন্য ব্যবহার করা হয়।",
+            AppLanguage.EN to "Probes and traceroute analyze path behavior. Gateway 1 is your local router. The actual upstream WAN gateway is verified via discovery protocols or reported as Unknown, using traceroute strictly for path analysis."
         ),
         "gatewayNotFound" to mapOf(AppLanguage.BN to "গেটওয়ে পাওয়া যায়নি", AppLanguage.EN to "Gateway not found"),
         "diagnosticFailed" to mapOf(AppLanguage.BN to "ডায়াগনস্টিক ব্যর্থ হয়েছে", AppLanguage.EN to "Diagnostic failed"),
@@ -111,7 +111,15 @@ object Translations {
         "tracerouteCandidatesLabel" to mapOf(AppLanguage.BN to "সম্ভাব্য আপস্ট্রিম হপসমূহ", AppLanguage.EN to "Candidate Upstream Hops"),
         "reasoningEvidenceLabel" to mapOf(AppLanguage.BN to "যুক্তি ও প্রটোকল প্রমাণ লগ", AppLanguage.EN to "Reasoning & Evidence Log"),
         "confirmedGateway" to mapOf(AppLanguage.BN to "প্রমাণিত গেটওয়ে", AppLanguage.EN to "Confirmed Actual Gateway"),
-        "inferredCandidate" to mapOf(AppLanguage.BN to "অনুমানকৃত সম্ভাব্য রাউটার", AppLanguage.EN to "Inferred Candidate Router")
+        "inferredCandidate" to mapOf(AppLanguage.BN to "অনুমানকৃত সম্ভাব্য রাউটার", AppLanguage.EN to "Inferred Candidate Router"),
+        "statusGood" to mapOf(AppLanguage.BN to "ভালো", AppLanguage.EN to "Good"),
+        "statusProblem" to mapOf(AppLanguage.BN to "সমস্যা", AppLanguage.EN to "Problem"),
+        "statusUnknown" to mapOf(AppLanguage.BN to "অজানা", AppLanguage.EN to "Unknown"),
+        "workflowDiagram" to mapOf(AppLanguage.BN to "নেটওয়ার্ক ওয়ার্কফ্লো ডায়াগ্রাম", AppLanguage.EN to "Network Workflow Diagram"),
+        "workflowSubtitle" to mapOf(
+            AppLanguage.BN to "ডিভাইস ➔ লোকাল গেটওয়ে ➔ আপস্ট্রিম গেটওয়ে ➔ ইন্টারনেট",
+            AppLanguage.EN to "Device ➔ Local Gateway ➔ Upstream Gateway ➔ Internet"
+        )
     )
 
     fun tr(key: String, lang: AppLanguage): String {

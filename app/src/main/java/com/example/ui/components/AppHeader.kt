@@ -31,9 +31,7 @@ fun AppHeader(
     language: AppLanguage,
     onToggleLanguage: () -> Unit,
     onReload: () -> Unit,
-    onOpenServerConfig: () -> Unit,
-    isRefreshing: Boolean = false,
-    backendConnected: Boolean = false
+    isRefreshing: Boolean = false
 ) {
     Surface(
         color = AppColors.surface,
@@ -102,10 +100,10 @@ fun AppHeader(
                                 modifier = Modifier
                                     .size(7.dp)
                                     .clip(CircleShape)
-                                    .background(if (backendConnected) AppColors.green else AppColors.yellow)
+                                    .background(AppColors.green)
                             )
                             Text(
-                                text = if (backendConnected) "Backend Active" else "Local Mode",
+                                text = if (language == AppLanguage.BN) "লাইভ মনিটর" else "Live Monitor",
                                 fontSize = 11.sp,
                                 color = AppColors.inkMuted,
                                 fontWeight = FontWeight.Medium
@@ -114,7 +112,7 @@ fun AppHeader(
                     }
                 }
 
-                // Action Buttons: Language toggle, Server config, Refresh
+                // Action Buttons: Language toggle, Refresh
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(AppSpacing.sm)
@@ -139,19 +137,6 @@ fun AppHeader(
                                 color = AppColors.primary
                             )
                         }
-                    }
-
-                    // Server Config Icon Button
-                    IconButton(
-                        onClick = onOpenServerConfig,
-                        modifier = Modifier.size(36.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Settings,
-                            contentDescription = Translations.tr("serverSettings", language),
-                            tint = AppColors.inkSoft,
-                            modifier = Modifier.size(20.dp)
-                        )
                     }
 
                     // Reload Button

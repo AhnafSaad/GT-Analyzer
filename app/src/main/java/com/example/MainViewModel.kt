@@ -74,15 +74,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var dnsLoopJob: Job? = null
 
     init {
-        // Initial config fetch
-        viewModelScope.launch {
-            val success = configRepo.fetchRemoteConfig()
-            _backendConnected.value = success
-            if (success) {
-                _dnsResolvers.value = configRepo.dnsResolvers
-            }
-        }
-
         // Start auto-refresh loops
         startDashboardLoop()
         startDnsLoop()
@@ -102,9 +93,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _wifiInfo.value = NetworkUtils.getConnectedWifiInfo(getApplication())
             testPingOnce()
             refreshDnsPings()
-            val backendSuccess = configRepo.fetchRemoteConfig()
-            _backendConnected.value = backendSuccess
-            delay(500)
+            delay(300)
             _isRefreshing.value = false
         }
     }
@@ -231,7 +220,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _isDiagnosticLoading.value = true
             val res = diagnosticRepo.runDiagnostic(getApplication())
             _diagnosticResult.value = res
-            _backendConnected.value = res.isFromBackend
             _isDiagnosticLoading.value = false
         }
     }

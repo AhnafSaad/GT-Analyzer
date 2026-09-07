@@ -19,26 +19,6 @@ class DiagnosticRepository(
         .build()
 
     suspend fun runDiagnostic(context: Context): DiagnosticResult = withContext(Dispatchers.IO) {
-        val baseUrl = configRepository.apiBaseUrl
-        // Attempt backend endpoint first if available
-        try {
-            val request = Request.Builder()
-                .url("$baseUrl/api/diagnostic")
-                .build()
-
-            httpClient.newCall(request).execute().use { response ->
-                if (response.isSuccessful) {
-                    val body = response.body?.string()
-                    if (!body.isNullOrBlank()) {
-                        val parsed = parseDiagnosticJson(body)
-                        if (parsed != null) return@withContext parsed.copy(isFromBackend = true)
-                    }
-                }
-            }
-        } catch (_: Exception) {
-            // Backend unavailable -> fallback to on-device discovery
-        }
-
         // On-device multi-stage differential diagnostic
         runOnDeviceDiagnostic(context)
     }
@@ -127,16 +107,14 @@ class DiagnosticRepository(
         val upstreamGwDisplay = when {
             upstreamDiscovery.isConfirmed && upstreamDiscovery.detectedIp.isNotBlank() ->
                 upstreamDiscovery.detectedIp
-            upstreamDiscovery.detectedIp.isNotBlank() ->
-                "${upstreamDiscovery.detectedIp} (Candidate)"
             else ->
                 "Unknown"
         }
 
-        val upstreamGwStats = if (upstreamDiscovery.detectedIp.isNotBlank()) {
+        val upstreamGwStats = if (upstreamDiscovery.isConfirmed && upstreamDiscovery.detectedIp.isNotBlank()) {
             NetworkUtils.measureHostHealth(
                 upstreamDiscovery.detectedIp,
-                label = if (upstreamDiscovery.isConfirmed) "Upstream Gateway (GW2)" else "Inferred Upstream Router",
+                label = "Upstream Gateway (GW2)",
                 count = 4,
                 timeoutMs = 800
             )

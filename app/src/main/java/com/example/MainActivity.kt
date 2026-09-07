@@ -22,7 +22,6 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.ui.components.AppHeader
 import com.example.ui.components.AppTab
 import com.example.ui.components.FloatingTabBar
-import com.example.ui.components.ServerConfigDialog
 import com.example.ui.screens.*
 import com.example.ui.theme.AppColors
 import com.example.ui.theme.MyApplicationTheme
@@ -38,7 +37,6 @@ class MainActivity : ComponentActivity() {
                 val currentTab by viewModel.currentTab.collectAsStateWithLifecycle()
                 val language by viewModel.language.collectAsStateWithLifecycle()
                 val isRefreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
-                val backendConnected by viewModel.backendConnected.collectAsStateWithLifecycle()
 
                 val wifiInfo by viewModel.wifiInfo.collectAsStateWithLifecycle()
                 val pingMetrics by viewModel.pingMetrics.collectAsStateWithLifecycle()
@@ -48,7 +46,6 @@ class MainActivity : ComponentActivity() {
                 val speedTestState by viewModel.speedTestState.collectAsStateWithLifecycle()
                 val diagnosticResult by viewModel.diagnosticResult.collectAsStateWithLifecycle()
                 val isDiagnosticLoading by viewModel.isDiagnosticLoading.collectAsStateWithLifecycle()
-                val showServerDialog by viewModel.showServerDialog.collectAsStateWithLifecycle()
 
                 // Automatic Location Permission Popup on App Start
                 val context = LocalContext.current
@@ -93,9 +90,7 @@ class MainActivity : ComponentActivity() {
                             language = language,
                             onToggleLanguage = { viewModel.toggleLanguage() },
                             onReload = { viewModel.refreshAll() },
-                            onOpenServerConfig = { viewModel.openServerDialog() },
-                            isRefreshing = isRefreshing,
-                            backendConnected = backendConnected
+                            isRefreshing = isRefreshing
                         )
                     },
                     bottomBar = {
@@ -153,24 +148,13 @@ class MainActivity : ComponentActivity() {
                                         result = diagnosticResult,
                                         isLoading = isDiagnosticLoading,
                                         deviceIp = wifiInfo.ipAddress,
-                                        backendUrl = viewModel.configRepo.apiBaseUrl,
                                         language = language,
-                                        onRunDiagnostic = { viewModel.runDiagnostic() },
-                                        onOpenServerConfig = { viewModel.openServerDialog() }
+                                        onRunDiagnostic = { viewModel.runDiagnostic() }
                                     )
                                 }
                             }
                         }
                     }
-                }
-
-                if (showServerDialog) {
-                    ServerConfigDialog(
-                        currentUrl = viewModel.configRepo.apiBaseUrl,
-                        language = language,
-                        onSave = { viewModel.saveServerUrl(it) },
-                        onDismiss = { viewModel.closeServerDialog() }
-                    )
                 }
             }
         }
