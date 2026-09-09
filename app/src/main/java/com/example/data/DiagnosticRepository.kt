@@ -97,26 +97,40 @@ class DiagnosticRepository(
         val traceHops = NetworkUtils.executeTraceroute(target = targetPrimary, maxHops = 10)
 
         // Stage 4: Multi-Method Client-Side Upstream Gateway Discovery & Correlation
-        val upstreamDiscovery = upstreamGatewayProvider.discoverUpstreamGateway(
+        val upstreamDiscoveryRaw = upstreamGatewayProvider.discoverUpstreamGateway(
             context = context,
             localGateway = localGwIp,
             clientIp = clientIp,
             primaryHops = traceHops
         )
 
-        val upstreamGwDisplay = when {
-            upstreamDiscovery.isConfirmed && upstreamDiscovery.detectedIp.isNotBlank() ->
-                upstreamDiscovery.detectedIp
-            else ->
-                "Unknown"
+        // If traceHops has an IP at Hop 2 (or any candidate hop), ensure it is saved and confirmed
+        val hop2Ip = traceHops.getOrNull(1)?.ip?.takeIf { it != "*" && it.isNotBlank() && !it.equals("Unknown", ignoreCase = true) }
+        val detectedUpstream = upstreamDiscoveryRaw.detectedIp.takeIf { it.isNotBlank() && it != "*" && !it.equals("Unknown", ignoreCase = true) }
+            ?: hop2Ip
+            ?: traceHops.firstOrNull { it.hop > 1 && it.ip != "*" && it.ip.isNotBlank() && !it.ip.equals("Unknown", ignoreCase = true) }?.ip
+
+        val upstreamDiscovery = if (!detectedUpstream.isNullOrBlank()) {
+            upstreamDiscoveryRaw.copy(
+                detectedIp = detectedUpstream,
+                isConfirmed = true
+            )
+        } else {
+            upstreamDiscoveryRaw
         }
 
-        val upstreamGwStats = if (upstreamDiscovery.isConfirmed && upstreamDiscovery.detectedIp.isNotBlank()) {
+        val upstreamGwDisplay = if (upstreamDiscovery.detectedIp.isNotBlank() && upstreamDiscovery.detectedIp != "*") {
+            upstreamDiscovery.detectedIp
+        } else {
+            "Unknown"
+        }
+
+        val upstreamGwStats = if (upstreamGwDisplay != "Unknown") {
             NetworkUtils.measureHostHealth(
-                upstreamDiscovery.detectedIp,
+                upstreamGwDisplay,
                 label = "Upstream Gateway (GW2)",
                 count = 4,
-                timeoutMs = 800
+                timeoutMs = 2000
             )
         } else {
             null

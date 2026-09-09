@@ -91,6 +91,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _isRefreshing.value = true
             _wifiInfo.value = NetworkUtils.getConnectedWifiInfo(getApplication())
+            _nearbyNetworks.value = NetworkUtils.getNearbyNetworks(getApplication())
             testPingOnce()
             refreshDnsPings()
             delay(300)

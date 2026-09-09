@@ -81,4 +81,39 @@ class ExampleUnitTest {
         assertNull(NetworkUtils.parseTracerouteOutputLine(header, "8.8.8.8", 1, 10.0))
         assertNull(NetworkUtils.parseTracerouteOutputLine(stats, "8.8.8.8", 1, 10.0))
     }
+
+    @Test
+    fun testPartialResponse_Hop2CapturedReliably() {
+        // Simulating packet 1 lost, packet 2 returning 10.136.91.233
+        val lines = listOf(
+            "PING 8.8.8.8 (8.8.8.8) 56(84) bytes of data.",
+            "From 10.136.91.233: icmp_seq=2 Time to live exceeded",
+            "--- 8.8.8.8 ping statistics ---",
+            "3 packets transmitted, 1 received, 66% packet loss, time 2000ms"
+        )
+        val captured = lines.mapNotNull {
+            NetworkUtils.parseTracerouteOutputLine(it, "8.8.8.8", probeTtl = 2, elapsedMs = 12.4)
+        }.firstOrNull()
+
+        assertNotNull("Expected Hop 2 to be parsed from partial response", captured)
+        assertEquals(2, captured?.hopNumber)
+        assertEquals("10.136.91.233", captured?.ip)
+        assertFalse(captured?.isTargetReached ?: true)
+    }
+
+    @Test
+    fun testPartialResponse_VariousRouterReplyFormats() {
+        val formats = listOf(
+            "From 10.136.91.233 icmp_seq=1 Time to live exceeded",
+            "From 10.136.91.233: Time to live exceeded",
+            "92 bytes from 10.136.91.233: Time to live exceeded",
+            "From 10.136.91.233: icmp_seq=3 Time Exceeded"
+        )
+        for (fmt in formats) {
+            val res = NetworkUtils.parseTracerouteOutputLine(fmt, "8.8.8.8", probeTtl = 2, elapsedMs = 8.0)
+            assertNotNull("Failed to parse format: $fmt", res)
+            assertEquals("10.136.91.233", res?.ip)
+            assertEquals(2, res?.hopNumber)
+        }
+    }
 }

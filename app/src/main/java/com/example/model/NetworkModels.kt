@@ -108,6 +108,7 @@ enum class UpstreamConfidence {
 
 enum class UpstreamDetectionMethod {
     UPNP_IGD_WAN_SERVICE,
+    TTL_HOP2_TRACEROUTE,
     OS_ROUTING_TABLE,
     NAT_PMP_OR_PCP,
     MULTI_TARGET_TRACEROUTE_CORRELATION,
@@ -128,7 +129,13 @@ data class UpstreamDiscoveryResult(
     val reasoningEvidence: List<String> = emptyList(),
     val rootStatus: String = "Non-Root (Standard Android SELinux)",
     val ipv4Gateway: String = "",
-    val ipv6Gateway: String? = null
+    val ipv6Gateway: String? = null,
+    // Explicit UPnP & 2nd-Hop PPPoE Discovery Metadata
+    val upnpWanStatus: String? = null,
+    val upnpExternalIp: String? = null,
+    val upnpDefaultGateway: String? = null,
+    val pppoeGateway: String? = null,
+    val discoveryStrategyUsed: String = ""
 )
 
 data class DiagnosticEvidenceItem(

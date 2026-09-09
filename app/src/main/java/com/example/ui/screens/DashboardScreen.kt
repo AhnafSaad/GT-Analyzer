@@ -55,15 +55,37 @@ fun DashboardScreen(
             ContextCompat.checkSelfPermission(
                 context,
                 Manifest.permission.ACCESS_FINE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.ACCESS_COARSE_LOCATION
             ) == PackageManager.PERMISSION_GRANTED
         )
     }
 
+    val permissionsToRequest = remember {
+        buildList {
+            add(Manifest.permission.ACCESS_FINE_LOCATION)
+            add(Manifest.permission.ACCESS_COARSE_LOCATION)
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                add(Manifest.permission.NEARBY_WIFI_DEVICES)
+            }
+        }.toTypedArray()
+    }
+
     val permissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        hasLocationPermission = isGranted
-        if (isGranted) onRefresh()
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) {
+        val granted = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.ACCESS_FINE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED ||
+        ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.ACCESS_COARSE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+        hasLocationPermission = granted
+        if (granted) onRefresh()
     }
 
     // Determine verdict
@@ -119,7 +141,7 @@ fun DashboardScreen(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(AppRadius.pill))
                                 .background(AppColors.primary)
-                                .clickable { permissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION) }
+                                .clickable { permissionLauncher.launch(permissionsToRequest) }
                                 .padding(horizontal = 12.dp, vertical = 6.dp)
                         ) {
                             Text(
@@ -224,6 +246,23 @@ fun DashboardScreen(
                     MetricChip(
                         label = Translations.tr("localGateway", language),
                         value = wifiInfo.gatewayIp
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    MetricChip(
+                        label = Translations.tr("ipAddress", language),
+                        value = wifiInfo.ipAddress
+                    )
+                    MetricChip(
+                        label = "BSSID",
+                        value = wifiInfo.bssid
+                    )
+                    MetricChip(
+                        label = Translations.tr("signalStrength", language),
+                        value = "${wifiInfo.rssiDbm} dBm"
                     )
                 }
             }

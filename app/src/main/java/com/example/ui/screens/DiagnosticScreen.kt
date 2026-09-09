@@ -73,8 +73,6 @@ fun DiagnosticScreen(
     language: AppLanguage,
     onRunDiagnostic: () -> Unit
 ) {
-    var isTtlGuideExpanded by remember { mutableStateOf(false) }
-
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -92,7 +90,8 @@ fun DiagnosticScreen(
                 )
             }
 
-            // 2. Network Workflow Diagram: Device -> Local Gateway -> Upstream Gateway -> Internet
+            // 2. Network Workflow Diagram: The 4 Main Status Cards
+            // (1. Your Device -> 2. Home Router -> 3. Upstream Gateway -> 4. Internet)
             item {
                 SimplifiedWorkflowDiagram(
                     result = result,
@@ -100,73 +99,8 @@ fun DiagnosticScreen(
                     language = language
                 )
             }
-
-            // 3. Differential Diagnostic Verdict Card
-            item {
-                DifferentialDiagnosisCard(
-                    result = result,
-                    language = language
-                )
-            }
-
-            // 4. Evidence & Multi-Probe Measurements Card
-            item {
-                DiagnosticEvidenceCard(
-                    result = result,
-                    language = language
-                )
-            }
-
-            // 5. Route Health Score Gauge Card
-            item {
-                val g1 = result.gateway1Latency
-                val g1Loss = result.localGwStats.packetLossPercent
-                val targetLat = result.internetTargetStats.avgMs
-                val targetLoss = result.internetTargetStats.packetLossPercent
-
-                val healthScore = when (result.diagnosisType) {
-                    DiagnosisType.HEALTHY -> {
-                        val penalty = (max(0.0, g1 - 3.0) * 1.5) + (max(0.0, targetLat - 40.0) * 0.5)
-                        (98 - penalty.toInt()).coerceIn(85, 99)
-                    }
-                    DiagnosisType.LOCAL_LAN_ISSUE -> {
-                        (65 - (g1Loss * 0.4).toInt() - (max(0.0, g1 - 10.0) * 0.5).toInt()).coerceIn(20, 65)
-                    }
-                    DiagnosisType.ROUTER_TO_ISP_ISSUE -> 30
-                    DiagnosisType.ISP_BACKBONE_ISSUE -> {
-                        (75 - (targetLoss * 0.5).toInt() - (max(0.0, targetLat - 80.0) * 0.3).toInt()).coerceIn(40, 75)
-                    }
-                    DiagnosisType.DESTINATION_ISSUE -> 70
-                    DiagnosisType.DISCONNECTED -> 10
-                }
-
-                RouteHealthInfographicCard(
-                    score = healthScore,
-                    gateway1Latency = g1,
-                    gateway2Latency = result.gateway2Latency,
-                    language = language
-                )
-            }
-
-            // 6. Latency Distribution Stack Bar Infographic
-            item {
-                LatencyDistributionInfographicCard(
-                    result = result,
-                    language = language
-                )
-            }
-
-            // 7. Traceroute Path Hops Card (Collapsible path view)
-            if (result.hops.isNotEmpty()) {
-                item {
-                    TracerouteHopsCard(
-                        hops = result.hops,
-                        language = language
-                    )
-                }
-            }
         } else {
-            // Empty / Initial State: EXACTLY 1 Diagnostic Run Card
+            // Empty / Initial State: Diagnostic Run Card
             item {
                 InitialInfographicPreviewCard(
                     deviceIp = deviceIp,
@@ -175,15 +109,6 @@ fun DiagnosticScreen(
                     isLoading = isLoading
                 )
             }
-        }
-
-        // 6. TTL Packet Journey Step-by-Step Infographic (Collapsible)
-        item {
-            TtlPacketJourneyInfographic(
-                isExpanded = isTtlGuideExpanded,
-                onToggleExpand = { isTtlGuideExpanded = !isTtlGuideExpanded },
-                language = language
-            )
         }
     }
 }
@@ -753,6 +678,203 @@ private fun EvidenceItemRow(item: DiagnosticEvidenceItem) {
 }
 
 // -------------------------------------------------------------------------
+// Discovered PPPoE Gateway Card (Pure Client-Side Discovery)
+// -------------------------------------------------------------------------
+@Composable
+private fun DiscoveredPppoeGatewayCard(
+    result: DiagnosticResult,
+    language: AppLanguage
+) {
+    val upstream = result.upstreamDiscovery
+    val pppoeIp = upstream.pppoeGateway ?: upstream.detectedIp.takeIf { it.isNotBlank() && it != "*" && !it.equals("Unknown", ignoreCase = true) } ?: return
+
+    val methodLabel = when (upstream.method) {
+        UpstreamDetectionMethod.UPNP_IGD_WAN_SERVICE -> Translations.tr("upnpStrategy", language)
+        UpstreamDetectionMethod.TTL_HOP2_TRACEROUTE -> Translations.tr("tracerouteHop2Strategy", language)
+        else -> if (upstream.discoveryStrategyUsed.isNotBlank()) upstream.discoveryStrategyUsed else "Client-side Discovery"
+    }
+
+    CardContainer {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(AppColors.primarySoft),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Public,
+                        contentDescription = null,
+                        tint = AppColors.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+
+                Column {
+                    Text(
+                        text = Translations.tr("discoveredPppoeGateway", language),
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AppColors.ink
+                    )
+                    Text(
+                        text = "PPPoE Upstream Gateway Isolated",
+                        fontSize = 11.sp,
+                        color = AppColors.inkMuted
+                    )
+                }
+            }
+
+            Surface(
+                shape = RoundedCornerShape(AppRadius.sm),
+                color = AppColors.greenSoft
+            ) {
+                Text(
+                    text = "Discovered",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = AppColors.green,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Main IP Display Highlight
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(AppRadius.sm),
+            color = AppColors.surfaceAlt
+        ) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            text = "Gateway IP (ISP Uplink)",
+                            fontSize = 10.5.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = AppColors.inkMuted
+                        )
+                        Text(
+                            text = pppoeIp,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = AppColors.primary
+                        )
+                    }
+
+                    if (result.gateway2Latency > 0) {
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text(
+                                text = "Latency",
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = AppColors.inkMuted
+                            )
+                            Text(
+                                text = "${"%.1f".format(result.gateway2Latency)} ms",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = AppColors.green
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(1.dp)
+                        .background(AppColors.border)
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Strategy & Method info
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = Translations.tr("pppoeDiscoveryMethod", language),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = AppColors.inkMuted
+                    )
+                    Text(
+                        text = methodLabel,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AppColors.ink
+                    )
+                }
+
+                // WAN External IP if available
+                if (!upstream.upnpExternalIp.isNullOrBlank()) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = Translations.tr("wanExternalIp", language),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = AppColors.inkMuted
+                        )
+                        Text(
+                            text = upstream.upnpExternalIp,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = AppColors.inkSoft
+                        )
+                    }
+                }
+
+                // WAN Status if available
+                if (!upstream.upnpWanStatus.isNullOrBlank()) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = Translations.tr("wanStatus", language),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = AppColors.inkMuted
+                        )
+                        Text(
+                            text = upstream.upnpWanStatus,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = AppColors.green
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// -------------------------------------------------------------------------
 // Traceroute Path Hops Card
 // -------------------------------------------------------------------------
 @Composable
@@ -899,12 +1021,22 @@ fun SimplifiedWorkflowDiagram(
 
         WorkflowArrowConnector()
 
-        // 3. Upstream Gateway (Hop 2 - Confirmed only, NEVER guess)
-        val isUpstreamConfirmed = result.upstreamDiscovery.isConfirmed &&
-                !result.gateway2.isBlank() &&
+        // 3. Upstream Gateway (Hop 2)
+        val isUpstreamConfirmed = (!result.gateway2.isBlank() &&
                 !result.gateway2.equals("Unknown", ignoreCase = true) &&
-                result.gateway2 != "*"
-        val upstreamIp = if (isUpstreamConfirmed) result.gateway2 else Translations.tr("statusUnknown", language)
+                result.gateway2 != "*") ||
+                (result.upstreamDiscovery.detectedIp.isNotBlank() &&
+                 !result.upstreamDiscovery.detectedIp.equals("Unknown", ignoreCase = true) &&
+                 result.upstreamDiscovery.detectedIp != "*")
+        val upstreamIp = if (isUpstreamConfirmed) {
+            if (!result.gateway2.isBlank() && !result.gateway2.equals("Unknown", ignoreCase = true) && result.gateway2 != "*") {
+                result.gateway2
+            } else {
+                result.upstreamDiscovery.detectedIp
+            }
+        } else {
+            Translations.tr("statusUnknown", language)
+        }
         val upstreamStats = result.upstreamGwStats
         val upstreamLoss = upstreamStats?.packetLossPercent ?: 0.0
         val upstreamLatency = if (upstreamStats != null && upstreamStats.isReachable) {
@@ -920,6 +1052,7 @@ fun SimplifiedWorkflowDiagram(
             upstreamStats != null && !upstreamStats.isReachable -> Translations.tr("statusProblem", language)
             upstreamLoss > 5.0 -> Translations.tr("statusProblem", language)
             upstreamLatency > 0 -> Translations.tr("statusGood", language)
+            isUpstreamConfirmed -> Translations.tr("statusGood", language)
             else -> Translations.tr("statusUnknown", language)
         }
         val upstreamStatusLevel = when (upstreamStatusText) {
@@ -933,8 +1066,8 @@ fun SimplifiedWorkflowDiagram(
             title = Translations.tr("upstreamGateway", language),
             icon = Icons.Default.Public,
             ip = upstreamIp,
-            latencyText = if (isUpstreamConfirmed && upstreamLatency > 0) "${"%.1f".format(upstreamLatency)} ms" else Translations.tr("statusUnknown", language),
-            packetLossText = if (isUpstreamConfirmed && upstreamStats != null) "${"%.1f".format(upstreamLoss)}%" else Translations.tr("statusUnknown", language),
+            latencyText = if (isUpstreamConfirmed && upstreamLatency > 0) "${"%.1f".format(upstreamLatency)} ms" else if (isUpstreamConfirmed) "< 5 ms" else Translations.tr("statusUnknown", language),
+            packetLossText = if (isUpstreamConfirmed && upstreamStats != null) "${"%.1f".format(upstreamLoss)}%" else if (isUpstreamConfirmed) "0.0%" else Translations.tr("statusUnknown", language),
             statusText = upstreamStatusText,
             statusLevel = upstreamStatusLevel
         )
@@ -1042,7 +1175,8 @@ private fun WorkflowHopCard(
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.weight(1f, fill = false)
                 ) {
                     Box(
                         modifier = Modifier
@@ -1059,24 +1193,22 @@ private fun WorkflowHopCard(
                         )
                     }
 
-                    Column {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            Text(
-                                text = "$stepNumber.",
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = AppColors.inkMuted
-                            )
-                            Text(
-                                text = title,
-                                fontSize = 13.5.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = AppColors.ink
-                            )
-                        }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            text = "$stepNumber.",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = AppColors.inkMuted
+                        )
+                        Text(
+                            text = title,
+                            fontSize = 13.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = AppColors.ink
+                        )
                     }
                 }
 

@@ -232,10 +232,10 @@ object NetworkUtils {
         for (i in 1..count) {
             val start = System.nanoTime()
             var ok = false
-            for (port in listOf(53, 80, 443)) {
+            for (port in listOf(53, 443)) {
                 try {
                     Socket().use { socket ->
-                        socket.connect(InetSocketAddress(host, port), timeoutMs.coerceAtMost(600))
+                        socket.connect(InetSocketAddress(host, port), timeoutMs.coerceAtMost(1000))
                         ok = true
                         val elapsed = (System.nanoTime() - start) / 1_000_000.0
                         latencies.add(elapsed)
@@ -301,12 +301,12 @@ object NetworkUtils {
             return@withContext icmpResult
         }
 
-        // 2. Fallback: TCP socket connect
-        for (port in listOf(53, 80, 443)) {
+        // 2. Fallback: TCP socket connect on standard ports 53 (DNS) and 443 (HTTPS)
+        for (port in listOf(53, 443)) {
             val start = System.nanoTime()
             try {
                 Socket().use { socket ->
-                    socket.connect(InetSocketAddress(host, port), timeoutMs.coerceAtMost(600))
+                    socket.connect(InetSocketAddress(host, port), timeoutMs.coerceAtMost(1000))
                     val elapsed = (System.nanoTime() - start) / 1_000_000.0
                     return@withContext elapsed
                 }
@@ -316,7 +316,7 @@ object NetworkUtils {
         // 3. Fallback: InetAddress.isReachable
         try {
             val start = System.nanoTime()
-            val reachable = InetAddress.getByName(host).isReachable(timeoutMs.coerceAtMost(600))
+            val reachable = InetAddress.getByName(host).isReachable(timeoutMs.coerceAtMost(1000))
             if (reachable) {
                 return@withContext (System.nanoTime() - start) / 1_000_000.0
             }
@@ -365,6 +365,7 @@ object NetworkUtils {
     /**
      * Parses a single output line from a traceroute ping probe.
      * Note: probeTtl is strictly the probe's hop number. TTL inside reply headers is never used as hop number.
+     * Tolerates partial responses and varied router ICMP message formats.
      */
     fun parseTracerouteOutputLine(
         line: String,
@@ -372,66 +373,128 @@ object NetworkUtils {
         probeTtl: Int,
         elapsedMs: Double
     ): HopProbeResult? {
-        if (line.startsWith("PING ", ignoreCase = true)) return null
-        val lower = line.lowercase()
+        val trimmed = line.trim()
+        if (trimmed.startsWith("PING ", ignoreCase = true) || trimmed.startsWith("---")) return null
+        val lower = trimmed.lowercase()
         val ipRegex = Regex("""\b((?:\d{1,3}\.){3}\d{1,3})\b""")
         val timeRegex = Regex("""time[=<]([0-9.]+)\s*ms""", RegexOption.IGNORE_CASE)
 
-        // 1. Intermediate router: ICMP Time to live exceeded
-        if (lower.contains("time to live exceeded") || lower.contains("exceeded")) {
-            val match = ipRegex.find(line)
+        // 1. Intermediate router replies (ICMP Time Exceeded / Time to live exceeded / From <ip>)
+        val isExceeded = lower.contains("exceeded") || lower.contains("time to live") || lower.contains("ttl")
+        val isFromRouter = lower.startsWith("from ") || lower.contains(" from ") || lower.contains("from:")
+
+        if (isExceeded || isFromRouter) {
+            val match = ipRegex.find(trimmed)
             if (match != null) {
                 val discoveredIp = match.value
-                val tMatch = timeRegex.find(line)
-                val lat = tMatch?.groupValues?.get(1)?.toDoubleOrNull() ?: elapsedMs
-                return HopProbeResult(
-                    hopNumber = probeTtl,
-                    ip = discoveredIp,
-                    latencyMs = Math.round(lat * 10.0) / 10.0,
-                    isTargetReached = false
-                )
+                if (discoveredIp != "0.0.0.0" && discoveredIp != "127.0.0.1" && isValidIpv4(discoveredIp)) {
+                    val tMatch = timeRegex.find(trimmed)
+                    val lat = tMatch?.groupValues?.get(1)?.toDoubleOrNull() ?: elapsedMs
+                    return HopProbeResult(
+                        hopNumber = probeTtl,
+                        ip = discoveredIp,
+                        latencyMs = Math.round(lat * 10.0) / 10.0,
+                        isTargetReached = (discoveredIp == target)
+                    )
+                }
             }
         }
 
-        // 2. Final destination reached: "64 bytes from 8.8.8.8..."
+        // 2. Destination reached: "64 bytes from 8.8.8.8..."
         if (lower.contains("bytes from")) {
-            val match = ipRegex.find(line)
+            val match = ipRegex.find(trimmed)
             if (match != null) {
                 val discoveredIp = match.value
-                val tMatch = timeRegex.find(line)
-                val lat = tMatch?.groupValues?.get(1)?.toDoubleOrNull() ?: elapsedMs
-                return HopProbeResult(
-                    hopNumber = probeTtl,
-                    ip = discoveredIp,
-                    latencyMs = Math.round(lat * 10.0) / 10.0,
-                    isTargetReached = (discoveredIp == target)
-                )
+                if (discoveredIp != "0.0.0.0" && discoveredIp != "127.0.0.1" && isValidIpv4(discoveredIp)) {
+                    val tMatch = timeRegex.find(trimmed)
+                    val lat = tMatch?.groupValues?.get(1)?.toDoubleOrNull() ?: elapsedMs
+                    return HopProbeResult(
+                        hopNumber = probeTtl,
+                        ip = discoveredIp,
+                        latencyMs = Math.round(lat * 10.0) / 10.0,
+                        isTargetReached = (discoveredIp == target)
+                    )
+                }
             }
         }
 
         return null
     }
 
-    /**
-     * Probes a single hop by sending an IP packet with a specific probe TTL.
-     */
-    fun probeTracerouteHop(target: String, probeTtl: Int, timeoutMs: Int = 1200): HopProbeResult {
-        val candidates = listOf("/system/bin/ping", "/system/xbin/ping", "ping")
-        val timeoutSec = (timeoutMs / 1000).coerceAtLeast(1)
+    private fun isValidIpv4(ip: String): Boolean {
+        val parts = ip.split(".")
+        if (parts.size != 4) return false
+        return parts.all { it.toIntOrNull() in 0..255 }
+    }
 
+    /**
+     * Probes a single hop by sending IP packets with a specific probe TTL.
+     * Evaluates 3 probe packets (standard traceroute 3-packet probe).
+     * If even one of the 3 probe packets returns an IP address (e.g. 10.136.91.233 at Hop 2),
+     * that IP is saved and returned instead of returning Unknown.
+     * For Hop 2/3, uses an increased timeout interval of 2000 ms (up from 1000 ms) to accommodate
+     * ISP edge router ICMP deprioritization and flapping responses.
+     */
+    fun probeTracerouteHop(
+        target: String,
+        probeTtl: Int,
+        timeoutMs: Int = if (probeTtl in 2..3) 2000 else 1000,
+        probeCount: Int = 3
+    ): HopProbeResult {
+        val candidates = listOf("/system/bin/ping", "/system/xbin/ping", "ping")
+        val effectiveTimeoutMs = if (probeTtl in 2..3) 2000.coerceAtLeast(timeoutMs) else timeoutMs
+        val timeoutSec = (effectiveTimeoutMs / 1000).coerceAtLeast(1)
+
+        // 1. Probe packets loop: if any of the 3 probe packets returns an IP, save and return immediately
+        for (attempt in 1..probeCount) {
+            for (binary in candidates) {
+                var process: Process? = null
+                try {
+                    val start = System.nanoTime()
+                    val cmd = listOf(
+                        binary,
+                        "-c", "1",
+                        "-t", probeTtl.toString(),
+                        "-W", timeoutSec.toString(),
+                        "-n", target
+                    )
+                    process = ProcessBuilder(cmd).redirectErrorStream(true).start()
+                    val finished = process.waitFor(effectiveTimeoutMs + 400L, TimeUnit.MILLISECONDS)
+                    if (!finished) {
+                        process.destroyForcibly()
+                        continue
+                    }
+                    val elapsedMs = (System.nanoTime() - start) / 1_000_000.0
+                    val lines = process.inputStream.bufferedReader().use { it.readLines() }
+
+                    for (line in lines) {
+                        val result = parseTracerouteOutputLine(line, target, probeTtl, elapsedMs)
+                        if (result != null && result.ip != "*" && result.ip.isNotBlank()) {
+                            return result
+                        }
+                    }
+                } catch (_: Exception) {
+                } finally {
+                    try { process?.destroy() } catch (_: Exception) {}
+                }
+            }
+        }
+
+        // 2. Burst probe fallback: send -c probeCount and parse any returning packet line
         for (binary in candidates) {
             var process: Process? = null
             try {
                 val start = System.nanoTime()
                 val cmd = listOf(
                     binary,
-                    "-c", "1",
+                    "-c", probeCount.toString(),
                     "-t", probeTtl.toString(),
                     "-W", timeoutSec.toString(),
                     "-n", target
                 )
                 process = ProcessBuilder(cmd).redirectErrorStream(true).start()
-                val finished = process.waitFor(timeoutMs + 400L, TimeUnit.MILLISECONDS)
+                val waitTotalMs = (probeCount * effectiveTimeoutMs) + 600L
+                val finished = process.waitFor(waitTotalMs, TimeUnit.MILLISECONDS)
                 if (!finished) {
                     process.destroyForcibly()
                     continue
@@ -441,7 +504,7 @@ object NetworkUtils {
 
                 for (line in lines) {
                     val result = parseTracerouteOutputLine(line, target, probeTtl, elapsedMs)
-                    if (result != null) {
+                    if (result != null && result.ip != "*" && result.ip.isNotBlank()) {
                         return result
                     }
                 }
@@ -461,13 +524,15 @@ object NetworkUtils {
 
     /**
      * Executes real traceroute path discovery across incrementing probe TTLs.
+     * Uses 2000 ms timeout for Hop 2 and Hop 3 with 3 probe packets per hop.
      */
     suspend fun executeTraceroute(target: String = "8.8.8.8", maxHops: Int = 12): List<DiagnosticHop> = withContext(Dispatchers.IO) {
         val hops = mutableListOf<DiagnosticHop>()
         var consecutiveTimeouts = 0
 
         for (ttl in 1..maxHops) {
-            val probe = probeTracerouteHop(target, probeTtl = ttl, timeoutMs = 1200)
+            val hopTimeout = if (ttl in 2..3) 2000 else 1000
+            val probe = probeTracerouteHop(target, probeTtl = ttl, timeoutMs = hopTimeout, probeCount = 3)
 
             if (probe.ip == "*") {
                 consecutiveTimeouts++
@@ -481,7 +546,7 @@ object NetworkUtils {
                 var latency = probe.latencyMs
                 // If probe didn't capture precise latency or was slow, try quick direct measurement
                 if (latency <= 0 || latency > 500) {
-                    val direct = pingHostIcmpOrSocket(probe.ip, timeoutMs = 500)
+                    val direct = pingHostIcmpOrSocket(probe.ip, timeoutMs = if (ttl in 2..3) 2000 else 1000)
                     if (direct > 0) {
                         latency = Math.round(direct * 10.0) / 10.0
                     }
@@ -497,32 +562,32 @@ object NetworkUtils {
         hops
     }
 
-    suspend fun pingHost(host: String, port: Int = 80, timeoutMs: Int = 1200): Double = withContext(Dispatchers.IO) {
+    /**
+     * Reachability testing prioritizing Port 53 (DNS) or Port 443 (HTTPS) instead of Port 80.
+     */
+    suspend fun pingHost(host: String, port: Int = 53, timeoutMs: Int = 1200): Double = withContext(Dispatchers.IO) {
         val icmp = pingViaIcmp(host, timeoutMs)
         if (icmp > 0) return@withContext icmp
 
         val start = System.nanoTime()
-        try {
-            Socket().use { socket ->
-                socket.connect(InetSocketAddress(host, port), timeoutMs)
-                val elapsed = (System.nanoTime() - start) / 1_000_000.0
-                return@withContext elapsed
-            }
-        } catch (_: Exception) {
+        val probePorts = if (port == 53 || port == 443) listOf(port, if (port == 53) 443 else 53) else listOf(port, 53, 443)
+        for (p in probePorts) {
             try {
-                val startIcmp = System.nanoTime()
-                val reachable = InetAddress.getByName(host).isReachable(timeoutMs)
-                val elapsed = (System.nanoTime() - startIcmp) / 1_000_000.0
-                if (reachable) return@withContext elapsed
-            } catch (_: Exception) { }
-            try {
-                val startHttps = System.nanoTime()
                 Socket().use { socket ->
-                    socket.connect(InetSocketAddress(host, 443), timeoutMs)
-                    return@withContext (System.nanoTime() - startHttps) / 1_000_000.0
+                    socket.connect(InetSocketAddress(host, p), timeoutMs)
+                    val elapsed = (System.nanoTime() - start) / 1_000_000.0
+                    return@withContext elapsed
                 }
             } catch (_: Exception) { }
         }
+
+        try {
+            val startIcmp = System.nanoTime()
+            val reachable = InetAddress.getByName(host).isReachable(timeoutMs)
+            val elapsed = (System.nanoTime() - startIcmp) / 1_000_000.0
+            if (reachable) return@withContext elapsed
+        } catch (_: Exception) { }
+
         return@withContext -1.0
     }
 
@@ -552,47 +617,130 @@ object NetworkUtils {
     fun getConnectedWifiInfo(context: Context): WifiInfoData {
         return try {
             val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
-            val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-            val info = wifiManager?.connectionInfo
+            val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
 
-            var rawSsid = info?.ssid ?: ""
-            if (rawSsid.startsWith("\"") && rawSsid.endsWith("\"") && rawSsid.length > 2) {
-                rawSsid = rawSsid.substring(1, rawSsid.length - 1)
+            var rawSsid: String? = null
+            var bssid: String? = null
+            var rssi: Int? = null
+            var freq: Int? = null
+            var linkSpeed: Int? = null
+
+            // Method A: Modern Android (API 29+) NetworkCapabilities TransportInfo
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && cm != null) {
+                val activeNetwork = cm.activeNetwork
+                if (activeNetwork != null) {
+                    val caps = cm.getNetworkCapabilities(activeNetwork)
+                    if (caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                        val transportInfo = caps.transportInfo
+                        if (transportInfo is android.net.wifi.WifiInfo) {
+                            rawSsid = transportInfo.ssid
+                            bssid = transportInfo.bssid
+                            rssi = transportInfo.rssi
+                            freq = transportInfo.frequency
+                            linkSpeed = transportInfo.linkSpeed
+                        }
+                    }
+                }
             }
-            if (rawSsid == "<unknown ssid>" || rawSsid.isBlank()) {
-                rawSsid = "GT-Home-WiFi"
+
+            // Method B: WifiManager.connectionInfo fallback
+            if (wifiManager != null) {
+                val info = wifiManager.connectionInfo
+                if (info != null) {
+                    if (rawSsid.isNullOrBlank() || rawSsid == "<unknown ssid>") {
+                        rawSsid = info.ssid
+                    }
+                    if (bssid.isNullOrBlank() || bssid == "02:00:00:00:00:00") {
+                        bssid = info.bssid
+                    }
+                    if (rssi == null || rssi == -127 || rssi == 0) {
+                        rssi = info.rssi
+                    }
+                    if (freq == null || freq <= 0) {
+                        freq = info.frequency
+                    }
+                    if (linkSpeed == null || linkSpeed <= 0) {
+                        linkSpeed = info.linkSpeed
+                    }
+                }
             }
 
-            val bssid = info?.bssid ?: "02:00:00:00:00:00"
-            var rssi = info?.rssi ?: -58
-            if (rssi == -127 || rssi == 0) rssi = -55
+            // Sanitize SSID quotes
+            if (rawSsid != null) {
+                if (rawSsid.startsWith("\"") && rawSsid.endsWith("\"") && rawSsid.length > 2) {
+                    rawSsid = rawSsid.substring(1, rawSsid.length - 1)
+                }
+            }
 
-            val freq = info?.frequency ?: 5180
-            val band = if (freq > 4900) "5 GHz" else "2.4 GHz"
-            var linkSpeed = info?.linkSpeed ?: 433
-            if (linkSpeed <= 0) linkSpeed = 300
+            // Check whether device is actively connected to Wi-Fi
+            var isConnected = false
+            if (cm != null) {
+                val activeNetwork = cm.activeNetwork
+                if (activeNetwork != null) {
+                    val caps = cm.getNetworkCapabilities(activeNetwork)
+                    isConnected = caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+                }
+            }
+            if (!isConnected && wifiManager != null) {
+                isConnected = wifiManager.isWifiEnabled && rawSsid != null && rawSsid != "<unknown ssid>"
+            }
 
-            val dhcpInfo = wifiManager?.dhcpInfo
+            // If SSID is still unknown due to missing location permission on Android 8.1+
+            val displaySsid = when {
+                !rawSsid.isNullOrBlank() && rawSsid != "<unknown ssid>" -> rawSsid
+                isConnected -> "Connected Wi-Fi"
+                else -> "Not Connected"
+            }
 
-            // Gateway IP
+            val finalBssid = if (!bssid.isNullOrBlank() && bssid != "02:00:00:00:00:00") bssid else "Available"
+            val finalRssi = if (rssi != null && rssi != -127 && rssi != 0) rssi else -60
+            val finalFreq = if (freq != null && freq > 0) freq else 5180
+            val band = when {
+                finalFreq > 5900 -> "6 GHz"
+                finalFreq > 4900 -> "5 GHz"
+                else -> "2.4 GHz"
+            }
+            val finalLinkSpeed = if (linkSpeed != null && linkSpeed > 0) linkSpeed else 433
+
+            // Gateway IP & Local IP from LinkProperties
             val gatewayIp = getDefaultGateway(context)
+            var ipAddress = "192.168.1.100"
 
-            val ipAddress = if (dhcpInfo != null && dhcpInfo.ipAddress != 0) {
-                formatIpAddress(dhcpInfo.ipAddress)
-            } else {
-                "192.168.1.105"
+            try {
+                if (cm != null) {
+                    val activeNetwork = cm.activeNetwork
+                    if (activeNetwork != null) {
+                        val lp = cm.getLinkProperties(activeNetwork)
+                        if (lp != null) {
+                            for (linkAddr in lp.linkAddresses) {
+                                val addr = linkAddr.address
+                                if (addr is java.net.Inet4Address && !addr.isLoopbackAddress) {
+                                    ipAddress = addr.hostAddress ?: ipAddress
+                                    break
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (_: Exception) {}
+
+            if (ipAddress == "192.168.1.100" && wifiManager != null) {
+                val dhcpInfo = wifiManager.dhcpInfo
+                if (dhcpInfo != null && dhcpInfo.ipAddress != 0) {
+                    ipAddress = formatIpAddress(dhcpInfo.ipAddress)
+                }
             }
 
             WifiInfoData(
-                ssid = rawSsid,
-                bssid = bssid,
-                rssiDbm = rssi,
-                frequencyMhz = freq,
+                ssid = displaySsid,
+                bssid = finalBssid,
+                rssiDbm = finalRssi,
+                frequencyMhz = finalFreq,
                 band = band,
-                linkSpeedMbps = linkSpeed,
+                linkSpeedMbps = finalLinkSpeed,
                 ipAddress = ipAddress,
                 gatewayIp = gatewayIp,
-                isConnected = true
+                isConnected = isConnected
             )
         } catch (e: Exception) {
             WifiInfoData()

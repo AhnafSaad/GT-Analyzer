@@ -119,6 +119,30 @@ object Translations {
         "workflowSubtitle" to mapOf(
             AppLanguage.BN to "ডিভাইস ➔ লোকাল গেটওয়ে ➔ আপস্ট্রিম গেটওয়ে ➔ ইন্টারনেট",
             AppLanguage.EN to "Device ➔ Local Gateway ➔ Upstream Gateway ➔ Internet"
+        ),
+        "discoveredPppoeGateway" to mapOf(
+            AppLanguage.BN to "শনাক্তকৃত পিপিপিওই গেটওয়ে",
+            AppLanguage.EN to "Discovered PPPoE Gateway"
+        ),
+        "pppoeDiscoveryMethod" to mapOf(
+            AppLanguage.BN to "পদ্ধতি",
+            AppLanguage.EN to "Discovery Method"
+        ),
+        "upnpStrategy" to mapOf(
+            AppLanguage.BN to "১. UPnP/IGD প্রোটোকল কোয়েরি",
+            AppLanguage.EN to "Strategy 1: UPnP/IGD Protocol (SOAP)"
+        ),
+        "tracerouteHop2Strategy" to mapOf(
+            AppLanguage.BN to "২. ২য় হপ ট্রেসরুট আইসোলেশন (TTL=2)",
+            AppLanguage.EN to "Strategy 2: 2nd-Hop Traceroute (TTL=2)"
+        ),
+        "wanExternalIp" to mapOf(
+            AppLanguage.BN to "রাউটার WAN বাহ্যিক আইপি",
+            AppLanguage.EN to "Router WAN External IP"
+        ),
+        "wanStatus" to mapOf(
+            AppLanguage.BN to "WAN সংযোগ স্থিতি",
+            AppLanguage.EN to "WAN Connection Status"
         )
     )
 
