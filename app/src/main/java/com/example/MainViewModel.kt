@@ -1,6 +1,9 @@
 package com.example
 
+import android.Manifest
 import android.app.Application
+import android.content.pm.PackageManager
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.ConfigRepository
@@ -37,6 +40,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _backendConnected = MutableStateFlow(false)
     val backendConnected = _backendConnected.asStateFlow()
+
+    // Location Permission State
+    private val _hasLocationPermission = MutableStateFlow(checkLocationPermissionGranted())
+    val hasLocationPermission = _hasLocationPermission.asStateFlow()
+
+    fun checkLocationPermissionGranted(): Boolean {
+        return ContextCompat.checkSelfPermission(
+            getApplication(),
+            Manifest.permission.ACCESS_FINE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED ||
+        ContextCompat.checkSelfPermission(
+            getApplication(),
+            Manifest.permission.ACCESS_COARSE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    fun updateLocationPermissionGranted(granted: Boolean) {
+        _hasLocationPermission.value = granted
+        if (granted) {
+            refreshAll()
+        }
+    }
+
+    fun refreshLocationPermissionState() {
+        val granted = checkLocationPermissionGranted()
+        _hasLocationPermission.value = granted
+        if (granted && _wifiInfo.value.ssid.contains("Unknown", ignoreCase = true)) {
+            refreshAll()
+        }
+    }
 
     // 1. Dashboard State
     private val _wifiInfo = MutableStateFlow(NetworkUtils.getConnectedWifiInfo(application))

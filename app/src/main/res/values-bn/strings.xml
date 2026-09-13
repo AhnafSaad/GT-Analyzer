@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">GT Wifi Analyzer</string>
+    <string name="troubleshoot_title">সমস্যা সমাধানের তথ্য</string>
+    <string name="troubleshoot_home_router_fail">আপনার ডিভাইস থেকে হোম রাউটারে সমস্যা।</string>
+    <string name="troubleshoot_upstream_gw_fail">আপনার রাউটার থেকে পরবর্তি ডিভাইসে সমস্যা।</string>
+    <string name="troubleshoot_internet_fail">আপনার ইন্টারনেটে সমস্যা, আইএসপি (ISP)-এর সাথে যোগাযোগ করুন।</string>
+    <string name="troubleshoot_all_success">আপনার নেটওয়ার্ক সংযোগ সম্পূর্ণ স্বাভাবিক আছে।</string>
+</resources>

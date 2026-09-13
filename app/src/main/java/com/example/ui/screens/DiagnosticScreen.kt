@@ -47,7 +47,9 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.sp
+import com.example.R
 import com.example.localization.AppLanguage
 import com.example.localization.Translations
 import com.example.model.DiagnosisType
@@ -90,7 +92,15 @@ fun DiagnosticScreen(
                 )
             }
 
-            // 2. Network Workflow Diagram: The 4 Main Status Cards
+            // 2. Intelligent Troubleshooting Notes Card
+            item {
+                TroubleshootingNotesCard(
+                    result = result,
+                    language = language
+                )
+            }
+
+            // 3. Network Workflow Diagram: The 4 Main Status Cards
             // (1. Your Device -> 2. Home Router -> 3. Upstream Gateway -> 4. Internet)
             item {
                 SimplifiedWorkflowDiagram(
@@ -178,6 +188,126 @@ private fun InfographicHeaderCard(
                 onClick = onRunDiagnostic,
                 isLoading = isLoading
             )
+        }
+    }
+}
+
+
+// -------------------------------------------------------------------------
+// 1b. Troubleshooting Notes Card Component
+// -------------------------------------------------------------------------
+@Composable
+private fun TroubleshootingNotesCard(
+    result: DiagnosticResult,
+    language: AppLanguage
+) {
+    val context = LocalContext.current
+
+    // 1. Evaluate Home Router Ping Status (< 3% loss threshold)
+    val isLocalGwValid = result.gateway1.isNotBlank() &&
+            result.gateway1 != "0.0.0.0" &&
+            !result.gateway1.equals("Not Connected", ignoreCase = true) &&
+            !result.gateway1.equals("Unknown", ignoreCase = true)
+    val localLoss = result.localGwStats.packetLossPercent
+    val homeRouterSuccess = isLocalGwValid &&
+            result.localGwStats.isReachable &&
+            localLoss < 3.0
+
+    // 2. Evaluate Upstream Gateway Ping Status (< 3% loss threshold)
+    val isUpstreamConfirmed = (!result.gateway2.isBlank() &&
+            !result.gateway2.equals("Unknown", ignoreCase = true) &&
+            result.gateway2 != "*") ||
+            (result.upstreamDiscovery.detectedIp.isNotBlank() &&
+             !result.upstreamDiscovery.detectedIp.equals("Unknown", ignoreCase = true) &&
+             result.upstreamDiscovery.detectedIp != "*")
+    val upstreamStats = result.upstreamGwStats
+    val upstreamLoss = upstreamStats?.packetLossPercent ?: 100.0
+    val upstreamSuccess = isUpstreamConfirmed &&
+            (upstreamStats?.isReachable == true) &&
+            upstreamLoss < 3.0
+
+    // 3. Evaluate Internet Gateway (e.g., 8.8.8.8) Ping Status (< 3% loss threshold)
+    val targetStats = result.internetTargetStats
+    val secTargetStats = result.secondaryTargetStats
+    val internetSuccess = (targetStats.isReachable && targetStats.packetLossPercent < 3.0) ||
+            (secTargetStats.isReachable && secTargetStats.packetLossPercent < 3.0)
+
+    // Hierarchical evaluation logic with 3% tolerance threshold
+    val stringResId: Int = when {
+        !homeRouterSuccess -> R.string.troubleshoot_home_router_fail
+        !upstreamSuccess -> R.string.troubleshoot_upstream_gw_fail
+        !internetSuccess -> R.string.troubleshoot_internet_fail
+        else -> R.string.troubleshoot_all_success
+    }
+
+    // Dynamic resolution via getString(R.string...) with AppLanguage fallback for runtime toggle
+    val noteText = if (language == AppLanguage.BN) {
+        when (stringResId) {
+            R.string.troubleshoot_home_router_fail -> Translations.tr("troubleshootHomeRouterFail", language)
+            R.string.troubleshoot_upstream_gw_fail -> Translations.tr("troubleshootUpstreamGwFail", language)
+            R.string.troubleshoot_internet_fail -> Translations.tr("troubleshootInternetFail", language)
+            else -> Translations.tr("troubleshootAllSuccess", language)
+        }
+    } else {
+        context.getString(stringResId)
+    }
+
+    val titleText = if (language == AppLanguage.BN) {
+        Translations.tr("troubleshootTitle", language)
+    } else {
+        context.getString(R.string.troubleshoot_title)
+    }
+
+    val isAllSuccess = homeRouterSuccess && upstreamSuccess && internetSuccess
+    val cardBg = if (isAllSuccess) AppColors.greenSoft else AppColors.redSoft
+    val borderColor = if (isAllSuccess) AppColors.green else AppColors.red
+    val iconColor = if (isAllSuccess) AppColors.green else AppColors.red
+    val icon = if (isAllSuccess) Icons.Default.CheckCircle else Icons.Default.Warning
+
+    CardContainer(
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(AppRadius.md))
+                .background(cardBg)
+                .border(1.dp, borderColor.copy(alpha = 0.4f), RoundedCornerShape(AppRadius.md))
+                .padding(AppSpacing.md),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(borderColor.copy(alpha = 0.15f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = iconColor,
+                    modifier = Modifier.size(24.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = titleText,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = AppColors.ink
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = noteText,
+                    fontSize = 13.sp,
+                    color = AppColors.ink,
+                    lineHeight = 18.sp
+                )
+            }
         }
     }
 }
