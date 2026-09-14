@@ -1,8 +1,10 @@
 package com.example.ui.screens
 
+import android.content.res.Configuration
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -44,10 +46,12 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.localization.AppLanguage
@@ -65,6 +69,7 @@ import com.example.ui.components.StatusTag
 import com.example.ui.theme.AppColors
 import com.example.ui.theme.AppRadius
 import com.example.ui.theme.AppSpacing
+import java.util.Locale
 import kotlin.math.max
 
 @Composable
@@ -92,9 +97,9 @@ fun DiagnosticScreen(
                 )
             }
 
-            // 2. Intelligent Troubleshooting Notes Card
+            // 2. Intelligent Troubleshooting Note (Warning / Info Banner)
             item {
-                TroubleshootingNotesCard(
+                TroubleshootingNoteCard(
                     result = result,
                     language = language
                 )
@@ -119,6 +124,296 @@ fun DiagnosticScreen(
                     isLoading = isLoading
                 )
             }
+        }
+    }
+}
+
+// -------------------------------------------------------------------------
+// Intelligent Troubleshooting Notes Card (Warning / Info Banner)
+// Strict Hierarchical Evaluation Logic:
+// Step 1: Router Loss >= 3% OR ping failed -> Problem with Home Router
+// Step 2: Router Good (< 3%) BUT Upstream Loss >= 3% OR ping failed -> Problem Router to Next Device
+// Step 3: Router & Upstream Good (< 3%) BUT Internet Loss >= 3% OR ping failed -> Internet Issue (Contact ISP)
+// Step 4: ALL Targets Good (< 3% loss) -> Network Completely Normal
+// -------------------------------------------------------------------------
+@Composable
+fun TroubleshootingNoteCard(
+    result: DiagnosticResult,
+    language: AppLanguage
+) {
+    // 1. Step 1 (Router): Local default gateway health check
+    val routerLoss = result.localGwStats.packetLossPercent
+    val isRouterReachable = result.localGwStats.isReachable &&
+            result.gateway1.isNotBlank() &&
+            result.gateway1 != "0.0.0.0" &&
+            !result.gateway1.equals("Not Connected", ignoreCase = true) &&
+            !result.gateway1.equals("Unknown", ignoreCase = true) &&
+            !(result.localGwStats.transmitted > 0 && result.localGwStats.received == 0)
+    val isRouterProblematic = !isRouterReachable || routerLoss >= 3.0
+
+    // 2. Step 2 (Upstream): Upstream gateway / next device health check
+    val upstreamStats = result.upstreamGwStats
+    val upstreamLoss = upstreamStats?.packetLossPercent ?: 0.0
+    val isUpstreamProblematic = if (upstreamStats != null) {
+        !upstreamStats.isReachable || upstreamLoss >= 3.0 || (upstreamStats.transmitted > 0 && upstreamStats.received == 0)
+    } else if (result.isFromBackend) {
+        result.gateway2Latency <= 0.0 || result.gateway2.isBlank() || result.gateway2.equals("Unknown", ignoreCase = true)
+    } else {
+        false
+    }
+
+    // 3. Step 3 (Internet): Internet targets (Primary 8.8.8.8 and Secondary 1.1.1.1)
+    val primaryReachable = result.internetTargetStats.isReachable && !(result.internetTargetStats.transmitted > 0 && result.internetTargetStats.received == 0)
+    val primaryLoss = result.internetTargetStats.packetLossPercent
+    val secondaryReachable = result.secondaryTargetStats.isReachable && !(result.secondaryTargetStats.transmitted > 0 && result.secondaryTargetStats.received == 0)
+    val secondaryLoss = result.secondaryTargetStats.packetLossPercent
+
+    val isInternetReachable = primaryReachable || secondaryReachable
+    val internetLoss = if (primaryReachable) {
+        primaryLoss
+    } else if (secondaryReachable) {
+        secondaryLoss
+    } else {
+        100.0
+    }
+    val isInternetProblematic = !isInternetReachable || internetLoss >= 3.0
+
+    // Strict hierarchical selection inside UI rendering
+    val stringResId: Int
+    val isSuccess: Boolean
+    val bannerIcon: ImageVector
+    val bannerStatusTag: String
+    val bannerStatusLevel: String
+    val stepLabel: String
+
+    if (isRouterProblematic) {
+        // Step 1: Router Packet Loss >= 3% OR ping failed completely
+        stringResId = R.string.troubleshooting_router_issue
+        isSuccess = false
+        bannerIcon = Icons.Default.Router
+        bannerStatusTag = if (language == AppLanguage.BN) "রাউটার সমস্যা" else "Router Issue"
+        bannerStatusLevel = "red"
+        stepLabel = if (language == AppLanguage.BN) "ধাপ ১: ডিভাইস ➔ হোম রাউটার" else "Step 1: Device ➔ Home Router"
+    } else if (isUpstreamProblematic) {
+        // Step 2: Router is Good (< 3%), BUT Upstream Packet Loss >= 3% OR ping failed completely
+        stringResId = R.string.troubleshooting_upstream_issue
+        isSuccess = false
+        bannerIcon = Icons.Default.Hub
+        bannerStatusTag = if (language == AppLanguage.BN) "আপস্ট্রিম সমস্যা" else "Upstream Issue"
+        bannerStatusLevel = "red"
+        stepLabel = if (language == AppLanguage.BN) "ধাপ ২: রাউটার ➔ পরবর্তী ডিভাইস" else "Step 2: Router ➔ Next Device"
+    } else if (isInternetProblematic) {
+        // Step 3: Router & Upstream are Good (< 3%), BUT Internet Packet Loss >= 3% OR ping failed completely
+        stringResId = R.string.troubleshooting_internet_issue
+        isSuccess = false
+        bannerIcon = Icons.Default.Cloud
+        bannerStatusTag = if (language == AppLanguage.BN) "আইএসপি সমস্যা" else "ISP Issue"
+        bannerStatusLevel = "red"
+        stepLabel = if (language == AppLanguage.BN) "ধাপ ৩: ইন্টারনেট / আইএসপি" else "Step 3: Internet / ISP"
+    } else {
+        // Step 4: Success - ALL targets have < 3% packet loss
+        stringResId = R.string.troubleshooting_success
+        isSuccess = true
+        bannerIcon = Icons.Default.CheckCircle
+        bannerStatusTag = if (language == AppLanguage.BN) "স্বাভাবিক" else "Normal"
+        bannerStatusLevel = "green"
+        stepLabel = if (language == AppLanguage.BN) "সংযোগ সম্পূর্ণ স্বাভাবিক" else "All Targets Normal"
+    }
+
+    // Resolve localized strings dynamically from Android String Resources (strings.xml / values-bn/strings.xml)
+    val context = LocalContext.current
+    val messageText = remember(stringResId, language) {
+        try {
+            val config = Configuration(context.resources.configuration)
+            config.setLocale(Locale(language.code))
+            val localizedContext = context.createConfigurationContext(config)
+            localizedContext.resources.getString(stringResId)
+        } catch (e: Exception) {
+            context.getString(stringResId)
+        }
+    }
+
+    val titleText = remember(language) {
+        try {
+            val config = Configuration(context.resources.configuration)
+            config.setLocale(Locale(language.code))
+            val localizedContext = context.createConfigurationContext(config)
+            localizedContext.resources.getString(R.string.troubleshooting_title)
+        } catch (e: Exception) {
+            context.getString(R.string.troubleshooting_title)
+        }
+    }
+
+    val accentColor = if (isSuccess) AppColors.green else AppColors.red
+    val accentBg = if (isSuccess) AppColors.greenSoft else AppColors.redSoft
+    val accentBorder = if (isSuccess) AppColors.greenSoftBorder else AppColors.redSoftBorder
+
+    CardContainer(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("troubleshooting_note_card")
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            // Header Row: Title, Step Subtitle, and Status Tag
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(accentColor.copy(alpha = 0.12f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = if (isSuccess) Icons.Default.CheckCircle else Icons.Default.Warning,
+                            contentDescription = null,
+                            tint = accentColor,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+
+                    Column {
+                        Text(
+                            text = titleText,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = AppColors.ink
+                        )
+                        Text(
+                            text = stepLabel,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = AppColors.inkMuted
+                        )
+                    }
+                }
+
+                StatusTag(
+                    text = bannerStatusTag,
+                    level = bannerStatusLevel
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Main Message Banner Box
+            Surface(
+                color = accentBg,
+                shape = RoundedCornerShape(AppRadius.md),
+                border = BorderStroke(1.dp, accentBorder),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("troubleshooting_message_banner")
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(32.dp)
+                            .clip(CircleShape)
+                            .background(accentColor.copy(alpha = 0.18f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = bannerIcon,
+                            contentDescription = null,
+                            tint = accentColor,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+
+                    Text(
+                        text = messageText,
+                        fontSize = 13.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = AppColors.ink,
+                        lineHeight = 20.sp,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Telemetry Metric Chips for Transparent Loss Inspection
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                TroubleshootingMetricPill(
+                    modifier = Modifier.weight(1f),
+                    label = Translations.tr("homeRouter", language),
+                    value = if (isRouterReachable) "${"%.1f".format(routerLoss)}%" else "100%",
+                    isProblem = isRouterProblematic
+                )
+
+                TroubleshootingMetricPill(
+                    modifier = Modifier.weight(1f),
+                    label = Translations.tr("upstreamGateway", language),
+                    value = if (upstreamStats != null) {
+                        if (upstreamStats.isReachable) "${"%.1f".format(upstreamLoss)}%" else "100%"
+                    } else {
+                        "N/A"
+                    },
+                    isProblem = isUpstreamProblematic
+                )
+
+                TroubleshootingMetricPill(
+                    modifier = Modifier.weight(1f),
+                    label = Translations.tr("internet", language),
+                    value = if (isInternetReachable) "${"%.1f".format(internetLoss)}%" else "100%",
+                    isProblem = isInternetProblematic
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TroubleshootingMetricPill(
+    modifier: Modifier = Modifier,
+    label: String,
+    value: String,
+    isProblem: Boolean
+) {
+    val pillColor = if (isProblem) AppColors.red else AppColors.green
+    val pillBg = if (isProblem) AppColors.redSoft else AppColors.greenSoft
+
+    Surface(
+        modifier = modifier,
+        color = pillBg,
+        shape = RoundedCornerShape(AppRadius.sm)
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = label,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Medium,
+                color = AppColors.inkMuted,
+                maxLines = 1
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = value,
+                fontSize = 11.5.sp,
+                fontWeight = FontWeight.Bold,
+                color = pillColor
+            )
         }
     }
 }
@@ -188,126 +483,6 @@ private fun InfographicHeaderCard(
                 onClick = onRunDiagnostic,
                 isLoading = isLoading
             )
-        }
-    }
-}
-
-
-// -------------------------------------------------------------------------
-// 1b. Troubleshooting Notes Card Component
-// -------------------------------------------------------------------------
-@Composable
-private fun TroubleshootingNotesCard(
-    result: DiagnosticResult,
-    language: AppLanguage
-) {
-    val context = LocalContext.current
-
-    // 1. Evaluate Home Router Ping Status (< 3% loss threshold)
-    val isLocalGwValid = result.gateway1.isNotBlank() &&
-            result.gateway1 != "0.0.0.0" &&
-            !result.gateway1.equals("Not Connected", ignoreCase = true) &&
-            !result.gateway1.equals("Unknown", ignoreCase = true)
-    val localLoss = result.localGwStats.packetLossPercent
-    val homeRouterSuccess = isLocalGwValid &&
-            result.localGwStats.isReachable &&
-            localLoss < 3.0
-
-    // 2. Evaluate Upstream Gateway Ping Status (< 3% loss threshold)
-    val isUpstreamConfirmed = (!result.gateway2.isBlank() &&
-            !result.gateway2.equals("Unknown", ignoreCase = true) &&
-            result.gateway2 != "*") ||
-            (result.upstreamDiscovery.detectedIp.isNotBlank() &&
-             !result.upstreamDiscovery.detectedIp.equals("Unknown", ignoreCase = true) &&
-             result.upstreamDiscovery.detectedIp != "*")
-    val upstreamStats = result.upstreamGwStats
-    val upstreamLoss = upstreamStats?.packetLossPercent ?: 100.0
-    val upstreamSuccess = isUpstreamConfirmed &&
-            (upstreamStats?.isReachable == true) &&
-            upstreamLoss < 3.0
-
-    // 3. Evaluate Internet Gateway (e.g., 8.8.8.8) Ping Status (< 3% loss threshold)
-    val targetStats = result.internetTargetStats
-    val secTargetStats = result.secondaryTargetStats
-    val internetSuccess = (targetStats.isReachable && targetStats.packetLossPercent < 3.0) ||
-            (secTargetStats.isReachable && secTargetStats.packetLossPercent < 3.0)
-
-    // Hierarchical evaluation logic with 3% tolerance threshold
-    val stringResId: Int = when {
-        !homeRouterSuccess -> R.string.troubleshoot_home_router_fail
-        !upstreamSuccess -> R.string.troubleshoot_upstream_gw_fail
-        !internetSuccess -> R.string.troubleshoot_internet_fail
-        else -> R.string.troubleshoot_all_success
-    }
-
-    // Dynamic resolution via getString(R.string...) with AppLanguage fallback for runtime toggle
-    val noteText = if (language == AppLanguage.BN) {
-        when (stringResId) {
-            R.string.troubleshoot_home_router_fail -> Translations.tr("troubleshootHomeRouterFail", language)
-            R.string.troubleshoot_upstream_gw_fail -> Translations.tr("troubleshootUpstreamGwFail", language)
-            R.string.troubleshoot_internet_fail -> Translations.tr("troubleshootInternetFail", language)
-            else -> Translations.tr("troubleshootAllSuccess", language)
-        }
-    } else {
-        context.getString(stringResId)
-    }
-
-    val titleText = if (language == AppLanguage.BN) {
-        Translations.tr("troubleshootTitle", language)
-    } else {
-        context.getString(R.string.troubleshoot_title)
-    }
-
-    val isAllSuccess = homeRouterSuccess && upstreamSuccess && internetSuccess
-    val cardBg = if (isAllSuccess) AppColors.greenSoft else AppColors.redSoft
-    val borderColor = if (isAllSuccess) AppColors.green else AppColors.red
-    val iconColor = if (isAllSuccess) AppColors.green else AppColors.red
-    val icon = if (isAllSuccess) Icons.Default.CheckCircle else Icons.Default.Warning
-
-    CardContainer(
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(AppRadius.md))
-                .background(cardBg)
-                .border(1.dp, borderColor.copy(alpha = 0.4f), RoundedCornerShape(AppRadius.md))
-                .padding(AppSpacing.md),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(CircleShape)
-                    .background(borderColor.copy(alpha = 0.15f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = null,
-                    tint = iconColor,
-                    modifier = Modifier.size(24.dp)
-                )
-            }
-
-            Spacer(modifier = Modifier.width(12.dp))
-
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = titleText,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = AppColors.ink
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = noteText,
-                    fontSize = 13.sp,
-                    color = AppColors.ink,
-                    lineHeight = 18.sp
-                )
-            }
         }
     }
 }

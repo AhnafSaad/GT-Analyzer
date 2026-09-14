@@ -27,13 +27,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.localization.AppLanguage
 import com.example.localization.Translations
 import com.example.model.NearbyWifiNetwork
@@ -48,11 +48,49 @@ fun NearbyNetworksScreen(
     networks: List<NearbyWifiNetwork>,
     isScanning: Boolean,
     language: AppLanguage,
-    hasLocationPermission: Boolean = true,
-    onPermissionGranted: () -> Unit = {},
     onScan: () -> Unit
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    // 1. Initial State Check: Initialize actively with system permission state.
+    var hasLocationPermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.ACCESS_FINE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+
+    // 2. Reactive Update: Observe lifecycle ON_RESUME
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                hasLocationPermission = ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.ACCESS_FINE_LOCATION
+                ) == PackageManager.PERMISSION_GRANTED
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
+    // 2. Reactive Update: Immediately update state when user grants permission via the button
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissionsMap ->
+        val isGranted = permissionsMap[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+                ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.ACCESS_FINE_LOCATION
+                ) == PackageManager.PERMISSION_GRANTED
+        hasLocationPermission = isGranted
+        if (isGranted) onScan()
+    }
 
     val permissionsToRequest = remember {
         buildList {
@@ -62,50 +100,6 @@ fun NearbyNetworksScreen(
                 add(Manifest.permission.NEARBY_WIFI_DEVICES)
             }
         }.toTypedArray()
-    }
-
-    val permissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestMultiplePermissions()
-    ) { resultMap ->
-        val isFineGranted = resultMap[Manifest.permission.ACCESS_FINE_LOCATION] == true
-        val isCoarseGranted = resultMap[Manifest.permission.ACCESS_COARSE_LOCATION] == true
-        val isAnyGranted = resultMap.values.any { it }
-        val isContextGranted = ContextCompat.checkSelfPermission(
-            context,
-            Manifest.permission.ACCESS_FINE_LOCATION
-        ) == PackageManager.PERMISSION_GRANTED ||
-        ContextCompat.checkSelfPermission(
-            context,
-            Manifest.permission.ACCESS_COARSE_LOCATION
-        ) == PackageManager.PERMISSION_GRANTED
-
-        if (isFineGranted || isCoarseGranted || isAnyGranted || isContextGranted) {
-            onPermissionGranted()
-            onScan()
-        }
-    }
-
-    val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                val isContextGranted = ContextCompat.checkSelfPermission(
-                    context,
-                    Manifest.permission.ACCESS_FINE_LOCATION
-                ) == PackageManager.PERMISSION_GRANTED ||
-                ContextCompat.checkSelfPermission(
-                    context,
-                    Manifest.permission.ACCESS_COARSE_LOCATION
-                ) == PackageManager.PERMISSION_GRANTED
-                if (isContextGranted && !hasLocationPermission) {
-                    onPermissionGranted()
-                }
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-        }
     }
 
     LazyColumn(

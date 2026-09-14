@@ -16,10 +16,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.ui.components.AppHeader
@@ -40,7 +37,6 @@ class MainActivity : ComponentActivity() {
                 val currentTab by viewModel.currentTab.collectAsStateWithLifecycle()
                 val language by viewModel.language.collectAsStateWithLifecycle()
                 val isRefreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
-                val hasLocationPermission by viewModel.hasLocationPermission.collectAsStateWithLifecycle()
 
                 val wifiInfo by viewModel.wifiInfo.collectAsStateWithLifecycle()
                 val pingMetrics by viewModel.pingMetrics.collectAsStateWithLifecycle()
@@ -65,34 +61,22 @@ class MainActivity : ComponentActivity() {
 
                 val permissionLauncher = rememberLauncherForActivityResult(
                     contract = ActivityResultContracts.RequestMultiplePermissions()
-                ) { permissionsMap ->
-                    val isGranted = permissionsMap[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
-                            permissionsMap[Manifest.permission.ACCESS_COARSE_LOCATION] == true ||
-                            permissionsMap.values.any { it } ||
-                            viewModel.checkLocationPermissionGranted()
-
-                    viewModel.updateLocationPermissionGranted(isGranted)
-                }
-
-                val lifecycleOwner = LocalLifecycleOwner.current
-                DisposableEffect(lifecycleOwner) {
-                    val observer = LifecycleEventObserver { _, event ->
-                        if (event == Lifecycle.Event.ON_RESUME) {
-                            viewModel.refreshLocationPermissionState()
-                        }
-                    }
-                    lifecycleOwner.lifecycle.addObserver(observer)
-                    onDispose {
-                        lifecycleOwner.lifecycle.removeObserver(observer)
-                    }
+                ) {
+                    // Once user responds to permission popup, reload network information
+                    viewModel.refreshAll()
                 }
 
                 LaunchedEffect(Unit) {
-                    val granted = viewModel.checkLocationPermissionGranted()
-                    if (!granted) {
+                    val hasLocationPermission = ContextCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.ACCESS_FINE_LOCATION
+                    ) == PackageManager.PERMISSION_GRANTED || ContextCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.ACCESS_COARSE_LOCATION
+                    ) == PackageManager.PERMISSION_GRANTED
+
+                    if (!hasLocationPermission) {
                         permissionLauncher.launch(locationPermissions)
-                    } else {
-                        viewModel.updateLocationPermissionGranted(true)
                     }
                 }
 
@@ -133,8 +117,6 @@ class MainActivity : ComponentActivity() {
                                         pingMetrics = pingMetrics,
                                         thresholds = viewModel.configRepo.thresholds,
                                         language = language,
-                                        hasLocationPermission = hasLocationPermission,
-                                        onPermissionGranted = { viewModel.updateLocationPermissionGranted(true) },
                                         onRefresh = { viewModel.refreshAll() }
                                     )
                                 }
@@ -150,8 +132,6 @@ class MainActivity : ComponentActivity() {
                                         networks = nearbyNetworks,
                                         isScanning = isScanning,
                                         language = language,
-                                        hasLocationPermission = hasLocationPermission,
-                                        onPermissionGranted = { viewModel.updateLocationPermissionGranted(true) },
                                         onScan = { viewModel.scanNearbyNetworks() }
                                     )
                                 }

@@ -144,23 +144,23 @@ object Translations {
             AppLanguage.BN to "WAN সংযোগ স্থিতি",
             AppLanguage.EN to "WAN Connection Status"
         ),
-        "troubleshootTitle" to mapOf(
-            AppLanguage.BN to "সমস্যা সমাধানের তথ্য",
-            AppLanguage.EN to "Troubleshooting Notes"
+        "troubleshootingTitle" to mapOf(
+            AppLanguage.BN to "ট্রাবলশুটিং নোট",
+            AppLanguage.EN to "Troubleshooting Note"
         ),
-        "troubleshootHomeRouterFail" to mapOf(
+        "troubleshootingRouterIssue" to mapOf(
             AppLanguage.BN to "আপনার ডিভাইস থেকে হোম রাউটারে সমস্যা।",
             AppLanguage.EN to "Problem connecting from your device to the home router."
         ),
-        "troubleshootUpstreamGwFail" to mapOf(
+        "troubleshootingUpstreamIssue" to mapOf(
             AppLanguage.BN to "আপনার রাউটার থেকে পরবর্তি ডিভাইসে সমস্যা।",
             AppLanguage.EN to "Problem connecting from your router to the next device."
         ),
-        "troubleshootInternetFail" to mapOf(
+        "troubleshootingInternetIssue" to mapOf(
             AppLanguage.BN to "আপনার ইন্টারনেটে সমস্যা, আইএসপি (ISP)-এর সাথে যোগাযোগ করুন।",
             AppLanguage.EN to "Internet connection issue, please contact your ISP."
         ),
-        "troubleshootAllSuccess" to mapOf(
+        "troubleshootingSuccess" to mapOf(
             AppLanguage.BN to "আপনার নেটওয়ার্ক সংযোগ সম্পূর্ণ স্বাভাবিক আছে।",
             AppLanguage.EN to "Your network connection is completely normal."
         )

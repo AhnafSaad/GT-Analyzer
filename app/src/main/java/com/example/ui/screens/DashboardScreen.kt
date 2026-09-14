@@ -24,13 +24,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.localization.AppLanguage
 import com.example.localization.Translations
 import com.example.model.GlobalThresholds
@@ -50,11 +50,46 @@ fun DashboardScreen(
     pingMetrics: PingMetrics,
     thresholds: GlobalThresholds,
     language: AppLanguage,
-    hasLocationPermission: Boolean = true,
-    onPermissionGranted: () -> Unit = {},
     onRefresh: () -> Unit
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    // 1. Initial State Check: Initialize actively with system permission state.
+    // If true on launch, the banner will never render.
+    var hasLocationPermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.ACCESS_FINE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+
+    // 2. Reactive Update: Observe lifecycle ON_RESUME so that if permission is granted
+    // at startup or via system settings, the banner hides immediately.
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                hasLocationPermission = ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.ACCESS_FINE_LOCATION
+                ) == PackageManager.PERMISSION_GRANTED
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
+    // Also update if wifiInfo refreshes following an external permission grant
+    LaunchedEffect(wifiInfo) {
+        hasLocationPermission = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.ACCESS_FINE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+    }
 
     val permissionsToRequest = remember {
         buildList {
@@ -66,47 +101,18 @@ fun DashboardScreen(
         }.toTypedArray()
     }
 
+    // 2. Reactive Update: Immediately update state when user grants permission via the button
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
-    ) { resultMap ->
-        val isFineGranted = resultMap[Manifest.permission.ACCESS_FINE_LOCATION] == true
-        val isCoarseGranted = resultMap[Manifest.permission.ACCESS_COARSE_LOCATION] == true
-        val isAnyGranted = resultMap.values.any { it }
-        val isContextGranted = ContextCompat.checkSelfPermission(
-            context,
-            Manifest.permission.ACCESS_FINE_LOCATION
-        ) == PackageManager.PERMISSION_GRANTED ||
-        ContextCompat.checkSelfPermission(
-            context,
-            Manifest.permission.ACCESS_COARSE_LOCATION
-        ) == PackageManager.PERMISSION_GRANTED
-
-        if (isFineGranted || isCoarseGranted || isAnyGranted || isContextGranted) {
-            onPermissionGranted()
-            onRefresh()
-        }
-    }
-
-    val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                val isContextGranted = ContextCompat.checkSelfPermission(
-                    context,
-                    Manifest.permission.ACCESS_FINE_LOCATION
-                ) == PackageManager.PERMISSION_GRANTED ||
+    ) { permissionsMap ->
+        val isGranted = permissionsMap[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
                 ContextCompat.checkSelfPermission(
                     context,
-                    Manifest.permission.ACCESS_COARSE_LOCATION
+                    Manifest.permission.ACCESS_FINE_LOCATION
                 ) == PackageManager.PERMISSION_GRANTED
-                if (isContextGranted && !hasLocationPermission) {
-                    onPermissionGranted()
-                }
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
+        hasLocationPermission = isGranted
+        if (isGranted) {
+            onRefresh()
         }
     }
 

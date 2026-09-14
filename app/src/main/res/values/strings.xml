@@ -1,8 +1,8 @@
 <resources>
     <string name="app_name">GT Wifi Analyzer</string>
-    <string name="troubleshoot_title">Troubleshooting Notes</string>
-    <string name="troubleshoot_home_router_fail">Problem connecting from your device to the home router.</string>
-    <string name="troubleshoot_upstream_gw_fail">Problem connecting from your router to the next device.</string>
-    <string name="troubleshoot_internet_fail">Internet connection issue, please contact your ISP.</string>
-    <string name="troubleshoot_all_success">Your network connection is completely normal.</string>
+    <string name="troubleshooting_title">Troubleshooting Note</string>
+    <string name="troubleshooting_router_issue">Problem connecting from your device to the home router.</string>
+    <string name="troubleshooting_upstream_issue">Problem connecting from your router to the next device.</string>
+    <string name="troubleshooting_internet_issue">Internet connection issue, please contact your ISP.</string>
+    <string name="troubleshooting_success">Your network connection is completely normal.</string>
 </resources>
