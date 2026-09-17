@@ -132,6 +132,47 @@ class ClientSideUpstreamGatewayEngine : UpstreamGatewayProvider {
         }
 
         // ---------------------------------------------------------------------
+        // Strategy 0: Router Status Page Scrape
+        // Fast-path reading WAN Default Gateway and WAN IP directly from local router status page
+        // ---------------------------------------------------------------------
+        if (localGateway.isNotBlank() && localGateway != "0.0.0.0") {
+            try {
+                val scrapeResult = scrapeRouterStatusPage(localGateway)
+                if (scrapeResult != null) {
+                    val (scrapedGateway, scrapedWanIp) = scrapeResult
+                    if (!scrapedGateway.isNullOrBlank() && isValidIpv4(scrapedGateway) && scrapedGateway != localGateway) {
+                        evidence.add("Strategy 0 (Router Status Page Scrape): Discovered router WAN Default Gateway: $scrapedGateway")
+                        if (!scrapedWanIp.isNullOrBlank()) {
+                            evidence.add("Strategy 0 (Router Status Page Scrape): Discovered router WAN External IP: $scrapedWanIp")
+                        }
+                        return@withContext UpstreamDiscoveryResult(
+                            detectedIp = scrapedGateway,
+                            isConfirmed = true,
+                            confidence = UpstreamConfidence.DIRECT,
+                            method = UpstreamDetectionMethod.ROUTER_STATUS_PAGE_SCRAPE,
+                            localIp = clientIp,
+                            localGateway = localGateway,
+                            tracerouteFirstHop = primaryHops.firstOrNull()?.ip ?: "",
+                            candidateHops = listOfNotNull(scrapedGateway, scrapedWanIp),
+                            reasoningEvidence = evidence,
+                            rootStatus = rootStatus,
+                            ipv4Gateway = ipv4Gw.ifBlank { localGateway },
+                            ipv6Gateway = ipv6Gw,
+                            upnpExternalIp = scrapedWanIp,
+                            upnpDefaultGateway = scrapedGateway,
+                            pppoeGateway = scrapedGateway,
+                            discoveryStrategyUsed = "Router status page scrape"
+                        )
+                    } else if (!scrapedWanIp.isNullOrBlank()) {
+                        evidence.add("Strategy 0 (Router Status Page Scrape): Discovered router WAN IP: $scrapedWanIp")
+                    }
+                }
+            } catch (_: Exception) {
+                // Silently fall through to existing UPnP/traceroute strategies
+            }
+        }
+
+        // ---------------------------------------------------------------------
         // Strategy 1: UPnP/IGD Protocol (SOAP Request to InternetGatewayDevice)
         // ---------------------------------------------------------------------
         var upnpDefaultGw: String? = null
@@ -524,6 +565,77 @@ class ClientSideUpstreamGatewayEngine : UpstreamGatewayProvider {
             if (probe.isTargetReached) break
         }
         return hops
+    }
+
+    /**
+     * Strategy 0: Scrapes common unauthenticated router status pages on the local gateway
+     * for WAN Default Gateway and WAN External IP addresses.
+     */
+    private fun scrapeRouterStatusPage(localGateway: String): Pair<String?, String?>? {
+        if (!isValidIpv4(localGateway) || localGateway == "0.0.0.0") return null
+
+        val candidatePaths = listOf(
+            "/index.html",
+            "/status.html",
+            "/goform/GetRouterStatus",
+            "/cgi-bin/luci/;stok=/admin/network",
+            "/wlanRedirect.htm"
+        )
+
+        val gatewayRegex = Regex(
+            """(?i)(?:default[\s_-]*gateway|gateway[\s_-]*ip|pppoe[\s_-]*gateway)[\s\S]{1,200}?(\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b)"""
+        )
+        val wanIpRegex = Regex(
+            """(?i)(?:wan[\s_-]*ip|external[\s_-]*ip)[\s\S]{1,200}?(\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b)"""
+        )
+
+        for (path in candidatePaths) {
+            var conn: HttpURLConnection? = null
+            try {
+                val url = URL("http://$localGateway$path")
+                conn = (url.openConnection() as? HttpURLConnection) ?: continue
+                conn.connectTimeout = 800
+                conn.readTimeout = 1200
+                conn.requestMethod = "GET"
+                conn.instanceFollowRedirects = true
+                conn.useCaches = false
+                conn.setRequestProperty(
+                    "User-Agent",
+                    "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+                )
+                conn.setRequestProperty(
+                    "Accept",
+                    "text/html,application/xhtml+xml,application/xml;q=0.9,application/json,*/*;q=0.8"
+                )
+
+                val code = conn.responseCode
+                if (code in 200..299) {
+                    val reader = conn.inputStream.bufferedReader()
+                    val buffer = CharArray(65536)
+                    val charsRead = reader.read(buffer, 0, buffer.size)
+                    if (charsRead > 0) {
+                        val body = String(buffer, 0, charsRead)
+                        val gwCandidate = gatewayRegex.find(body)?.groupValues?.get(1)?.takeIf {
+                            isValidIpv4(it) && it != "0.0.0.0" && it != "255.255.255.255" && !it.startsWith("255.255.")
+                        }
+                        val wanCandidate = wanIpRegex.find(body)?.groupValues?.get(1)?.takeIf {
+                            isValidIpv4(it) && it != "0.0.0.0" && it != "255.255.255.255" && !it.startsWith("255.255.")
+                        }
+
+                        if (gwCandidate != null || wanCandidate != null) {
+                            return Pair(gwCandidate, wanCandidate)
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+                // Silently fall through to next candidate path
+            } finally {
+                try {
+                    conn?.disconnect()
+                } catch (_: Exception) {}
+            }
+        }
+        return null
     }
 
     private fun isValidIpv4(ip: String): Boolean {

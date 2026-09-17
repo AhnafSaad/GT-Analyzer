@@ -1,5 +1,6 @@
 package com.example.ui.components
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
@@ -40,10 +41,16 @@ fun SignalGauge(
     )
 
     val gaugeColor = when {
-        clampedDbm >= -65 -> AppColors.green
-        clampedDbm >= -80 -> AppColors.yellow
-        else -> AppColors.red
+        dbm >= -50 -> Color(0xFF10B981) // Green (#10B981)
+        dbm >= -65 -> Color(0xFFF59E0B) // Amber / Orange (#F59E0B)
+        else -> Color(0xFFEF4444)       // Red (#EF4444)
     }
+
+    val animatedGaugeColor by animateColorAsState(
+        targetValue = gaugeColor,
+        animationSpec = tween(durationMillis = 300),
+        label = "gaugeColorAnimation"
+    )
 
     Box(
         modifier = modifier.size(190.dp),
@@ -74,9 +81,9 @@ fun SignalGauge(
             if (activeSweep > 0.5f) {
                 drawArc(
                     brush = Brush.sweepGradient(
-                        0.0f to AppColors.gradientStart,
-                        0.5f to AppColors.gradientEnd,
-                        1.0f to gaugeColor
+                        0.0f to animatedGaugeColor.copy(alpha = 0.35f),
+                        0.6f to animatedGaugeColor.copy(alpha = 0.8f),
+                        1.0f to animatedGaugeColor
                     ),
                     startAngle = startAngle,
                     sweepAngle = activeSweep,
@@ -99,7 +106,7 @@ fun SignalGauge(
                 center = Offset(dotX, dotY)
             )
             drawCircle(
-                color = gaugeColor,
+                color = animatedGaugeColor,
                 radius = 5.dp.toPx(),
                 center = Offset(dotX, dotY)
             )

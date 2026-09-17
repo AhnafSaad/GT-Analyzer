@@ -10,15 +10,15 @@ object AppColors {
     val primarySoft = Color(0xFFFFF1E8)
     val primarySoftBorder = Color(0xFFFFD9BC)
 
-    val green = Color(0xFF1B9C5A)
+    val green = Color(0xFF10B981) // Green (#10B981)
     val greenSoft = Color(0xFFE7F8EF)
     val greenSoftBorder = Color(0xFFBEEAD1)
 
-    val yellow = Color(0xFFC48A0A)
+    val yellow = Color(0xFFF59E0B) // Amber / Orange (#F59E0B)
     val yellowSoft = Color(0xFFFFF7E0)
     val yellowSoftBorder = Color(0xFFF5E1A0)
 
-    val red = Color(0xFFE0392F)
+    val red = Color(0xFFEF4444) // Red (#EF4444)
     val redSoft = Color(0xFFFDEBEA)
     val redSoftBorder = Color(0xFFF5C2BE)
 

@@ -77,7 +77,7 @@ fun AppHeader(
                     Column {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                text = "GT Wifi",
+                                text = "YT",
                                 fontSize = 17.sp,
                                 fontWeight = FontWeight.ExtraBold,
                                 color = AppColors.ink

@@ -2,6 +2,11 @@ package com.example.ui.screens
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.net.wifi.WifiManager
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -12,6 +17,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Router
@@ -23,6 +29,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -31,6 +38,9 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import com.example.localization.AppLanguage
 import com.example.localization.Translations
 import com.example.model.GlobalThresholds
@@ -38,6 +48,7 @@ import com.example.model.PingMetrics
 import com.example.model.WifiInfoData
 import com.example.ui.components.CardContainer
 import com.example.ui.components.LiveLineChart
+import com.example.ui.components.PrimaryButton
 import com.example.ui.components.SignalGauge
 import com.example.ui.components.VerdictBadge
 import com.example.ui.theme.AppColors
@@ -50,7 +61,8 @@ fun DashboardScreen(
     pingMetrics: PingMetrics,
     thresholds: GlobalThresholds,
     language: AppLanguage,
-    onRefresh: () -> Unit
+    onRefresh: () -> Unit,
+    onNavigateToDiagnostic: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -116,17 +128,76 @@ fun DashboardScreen(
         }
     }
 
-    // Determine verdict
-    val dbmOk = wifiInfo.rssiDbm >= thresholds.dbmGoodMin
-    val pingOk = pingMetrics.currentPingMs <= thresholds.pingGoodMax
-    val jitterOk = pingMetrics.jitterMs <= thresholds.jitterGoodMax
-    val lossOk = pingMetrics.packetLossPercent <= thresholds.packetLossGoodMax
+    // Aggressive Real-Time WiFi RSSI (dBm) State & History
+    val wifiManager = remember {
+        context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+    }
+    var currentDbm by remember(wifiInfo.rssiDbm) { mutableIntStateOf(wifiInfo.rssiDbm) }
+    val dbmHistory = remember {
+        mutableStateListOf<Double>().apply {
+            if (pingMetrics.dbmHistory.isNotEmpty()) {
+                addAll(pingMetrics.dbmHistory.map { it.toDouble() })
+            } else {
+                repeat(15) { add(wifiInfo.rssiDbm.toDouble()) }
+            }
+        }
+    }
 
-    val (verdictTitleKey, verdictLevel) = when {
-        dbmOk && pingOk && jitterOk && lossOk -> Pair("excellent", "green")
-        (wifiInfo.rssiDbm >= thresholds.dbmFairMin) && (pingMetrics.currentPingMs <= thresholds.pingFairMax) -> Pair("good", "green")
-        pingMetrics.currentPingMs <= thresholds.pingFairMax * 1.5 -> Pair("fair", "yellow")
-        else -> Pair("poor", "red")
+    // Lifecycle-Aware Aggressive Polling Loop (200ms delay ~ 5 times/sec)
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            while (isActive) {
+                val rawRssi = try {
+                    @Suppress("DEPRECATION")
+                    wifiManager?.connectionInfo?.rssi
+                } catch (e: Exception) {
+                    null
+                }
+
+                val validRssi = if (rawRssi != null && rawRssi != 0 && rawRssi != -127) {
+                    rawRssi
+                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+                    val caps = cm?.activeNetwork?.let { cm.getNetworkCapabilities(it) }
+                    (caps?.transportInfo as? android.net.wifi.WifiInfo)?.rssi?.takeIf { it != 0 && it != -127 }
+                } else {
+                    null
+                }
+
+                if (validRssi != null) {
+                    currentDbm = validRssi
+                    dbmHistory.add(validRssi.toDouble())
+                    if (dbmHistory.size > 20) {
+                        dbmHistory.removeAt(0)
+                    }
+                }
+                delay(200L)
+            }
+        }
+    }
+
+    val displayDbm = if (currentDbm != 0 && currentDbm != -127) currentDbm else wifiInfo.rssiDbm
+
+    // Dynamic Overall Status & Color mapping based on real-time dBm threshold rules:
+    // 1. Excellent: >= -50 dBm -> Green (#10B981)
+    // 2. Fair / Moderate: between -50 dBm and -65 dBm -> Amber / Orange (#F59E0B)
+    // 3. Weak / Poor: < -65 dBm -> Red (#EF4444)
+    val (statusTitle, statusColor, statusLevel) = when {
+        displayDbm >= -50 -> Triple(
+            if (language == AppLanguage.BN) "সার্বিক অবস্থা: চমৎকার" else "Overall Status: Excellent",
+            Color(0xFF10B981),
+            "green"
+        )
+        displayDbm >= -65 -> Triple(
+            if (language == AppLanguage.BN) "সার্বিক অবস্থা: মোটামুটি ভালো" else "Overall Status: Fair",
+            Color(0xFFF59E0B),
+            "yellow"
+        )
+        else -> Triple(
+            if (language == AppLanguage.BN) "সার্বিক অবস্থা: দুর্বল" else "Overall Status: Weak",
+            Color(0xFFEF4444),
+            "red"
+        )
     }
 
     LazyColumn(
@@ -184,7 +255,7 @@ fun DashboardScreen(
             }
         }
 
-        // 1. Signal Gauge & Verdict Section
+        // 1. Signal Gauge & Verdict Section with Diagnostic Shortcut
         item {
             CardContainer {
                 Column(
@@ -192,16 +263,25 @@ fun DashboardScreen(
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     SignalGauge(
-                        dbm = wifiInfo.rssiDbm,
+                        dbm = displayDbm,
                         label = Translations.tr("signalStrength", language)
                     )
 
                     Spacer(modifier = Modifier.height(14.dp))
 
                     VerdictBadge(
-                        title = "${Translations.tr("verdict", language)}: ${Translations.tr(verdictTitleKey, language)}",
-                        scoreText = "${wifiInfo.rssiDbm} dBm • ${"%.1f".format(pingMetrics.currentPingMs)} ms",
-                        level = verdictLevel
+                        title = statusTitle,
+                        scoreText = "$displayDbm dBm • ${"%.1f".format(pingMetrics.currentPingMs)} ms",
+                        level = statusLevel,
+                        customColor = statusColor
+                    )
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    PrimaryButton(
+                        text = Translations.tr("runDiagnosticShortcut", language),
+                        onClick = onNavigateToDiagnostic,
+                        modifier = Modifier.fillMaxWidth()
                     )
                 }
             }
@@ -290,7 +370,7 @@ fun DashboardScreen(
                     )
                     MetricChip(
                         label = Translations.tr("signalStrength", language),
-                        value = "${wifiInfo.rssiDbm} dBm"
+                        value = "$displayDbm dBm"
                     )
                 }
             }
@@ -302,11 +382,18 @@ fun DashboardScreen(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(AppSpacing.sm)
             ) {
+                val pingLatency = pingMetrics.currentPingMs
+                val pingColor = when {
+                    pingLatency <= 30.0 -> Color(0xFF10B981) // Green
+                    pingLatency <= 80.0 -> Color(0xFFF59E0B) // Amber/Orange
+                    else -> Color(0xFFEF4444)                // Red
+                }
                 MetricMiniCard(
                     title = Translations.tr("ping", language),
-                    value = "${"%.1f".format(pingMetrics.currentPingMs)}",
+                    value = "${"%.1f".format(pingLatency)}",
                     unit = Translations.tr("ms", language),
-                    status = if (pingMetrics.currentPingMs <= thresholds.pingGoodMax) "green" else if (pingMetrics.currentPingMs <= thresholds.pingFairMax) "yellow" else "red",
+                    status = if (pingLatency <= 30.0) "green" else if (pingLatency <= 80.0) "yellow" else "red",
+                    valueColor = pingColor,
                     modifier = Modifier.weight(1f)
                 )
                 MetricMiniCard(
@@ -339,9 +426,9 @@ fun DashboardScreen(
         item {
             LiveLineChart(
                 title = "${Translations.tr("signalStrength", language)} ${Translations.tr("history", language)}",
-                data = pingMetrics.dbmHistory.map { it.toDouble() },
+                data = dbmHistory,
                 unit = "dBm",
-                lineColor = AppColors.green
+                lineColor = statusColor
             )
         }
     }
@@ -361,7 +448,8 @@ private fun MetricMiniCard(
     value: String,
     unit: String,
     status: String,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    valueColor: Color? = null
 ) {
     val levelColor = when (status) {
         "green" -> AppColors.green
@@ -392,7 +480,7 @@ private fun MetricMiniCard(
                 Text(text = title, fontSize = 11.sp, color = AppColors.inkMuted, fontWeight = FontWeight.Medium)
             }
             Row(verticalAlignment = Alignment.Bottom) {
-                Text(text = value, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold, color = AppColors.ink)
+                Text(text = value, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold, color = valueColor ?: AppColors.ink)
                 Spacer(modifier = Modifier.width(3.dp))
                 Text(text = unit, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = AppColors.inkSoft, modifier = Modifier.padding(bottom = 2.dp))
             }

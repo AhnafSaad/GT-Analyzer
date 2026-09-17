@@ -37,7 +37,6 @@ enum class AppTab(val key: String, val icon: ImageVector) {
     DASHBOARD("dashboard", Icons.Default.Bolt),
     DNS("dns", Icons.Default.Dns),
     NEARBY("nearby", Icons.Default.Wifi),
-    SPEED("speed", Icons.Default.Speed),
     DIAGNOSTIC("diagnostic", Icons.Default.Hub)
 }
 

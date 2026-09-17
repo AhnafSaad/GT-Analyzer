@@ -51,11 +51,13 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.localization.AppLanguage
 import com.example.localization.Translations
+import com.example.model.DiagnosticMode
 import com.example.model.DiagnosisType
 import com.example.model.DiagnosticEvidenceItem
 import com.example.model.DiagnosticHop
@@ -76,9 +78,10 @@ import kotlin.math.max
 fun DiagnosticScreen(
     result: DiagnosticResult?,
     isLoading: Boolean,
+    progressPercent: Int = 0,
     deviceIp: String,
     language: AppLanguage,
-    onRunDiagnostic: () -> Unit
+    onRunDiagnostic: (DiagnosticMode) -> Unit
 ) {
     LazyColumn(
         modifier = Modifier
@@ -88,10 +91,11 @@ fun DiagnosticScreen(
         contentPadding = PaddingValues(top = AppSpacing.md, bottom = 100.dp)
     ) {
         if (result != null) {
-            // 1. Infographic Header & Re-run Action
+            // 1. Infographic Header & Mode Actions
             item {
                 InfographicHeaderCard(
                     isLoading = isLoading,
+                    progressPercent = progressPercent,
                     language = language,
                     onRunDiagnostic = onRunDiagnostic
                 )
@@ -105,8 +109,8 @@ fun DiagnosticScreen(
                 )
             }
 
-            // 3. Network Workflow Diagram: The 4 Main Status Cards
-            // (1. Your Device -> 2. Home Router -> 3. Upstream Gateway -> 4. Internet)
+            // 3. Network Workflow Diagram: The 5-Node Workflow
+            // (1. Your Device -> 2. Home Wifi Router -> 3. Upstream Gateway 1 -> 4. Upstream Gateway 2 -> 5. Internet)
             item {
                 SimplifiedWorkflowDiagram(
                     result = result,
@@ -115,13 +119,14 @@ fun DiagnosticScreen(
                 )
             }
         } else {
-            // Empty / Initial State: Diagnostic Run Card
+            // Empty / Initial State: Diagnostic Run Card with Quick and Full modes
             item {
                 InitialInfographicPreviewCard(
                     deviceIp = deviceIp,
                     language = language,
                     onRunDiagnostic = onRunDiagnostic,
-                    isLoading = isLoading
+                    isLoading = isLoading,
+                    progressPercent = progressPercent
                 )
             }
         }
@@ -418,14 +423,52 @@ private fun TroubleshootingMetricPill(
     }
 }
 
+@Composable
+private fun DiagnosticActionButton(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .height(52.dp)
+            .shadow(
+                elevation = 4.dp,
+                shape = RoundedCornerShape(AppRadius.pill),
+                spotColor = AppColors.primary
+            )
+            .clip(RoundedCornerShape(AppRadius.pill))
+            .background(
+                Brush.linearGradient(
+                    listOf(AppColors.gradientStart, AppColors.gradientEnd)
+                )
+            )
+            .clickable { onClick() }
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = text,
+            fontSize = 12.5.sp,
+            fontWeight = FontWeight.Bold,
+            color = Color.White,
+            textAlign = TextAlign.Center,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            lineHeight = 16.sp
+        )
+    }
+}
+
 // -------------------------------------------------------------------------
 // 1. Infographic Header Card
 // -------------------------------------------------------------------------
 @Composable
 private fun InfographicHeaderCard(
     isLoading: Boolean,
+    progressPercent: Int = 0,
     language: AppLanguage,
-    onRunDiagnostic: () -> Unit
+    onRunDiagnostic: (DiagnosticMode) -> Unit
 ) {
     CardContainer {
         Column(
@@ -464,9 +507,9 @@ private fun InfographicHeaderCard(
                     )
                     Text(
                         text = if (language == AppLanguage.BN)
-                            "ডুয়াল গেটওয়ে ও টিটিএল হপ ম্যাপিং"
+                            "৫-নোড নেটওয়ার্ক পাথ বিশ্লেষণ ও ডায়াগনস্টিক"
                         else
-                            "Dual Gateway & TTL Hop Visualization",
+                            "5-Node Network Path Analysis & Diagnostics",
                         fontSize = 12.sp,
                         color = AppColors.inkMuted
                     )
@@ -475,14 +518,56 @@ private fun InfographicHeaderCard(
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            PrimaryButton(
-                text = if (isLoading)
-                    Translations.tr("running", language)
-                else
-                    Translations.tr("runAgain", language),
-                onClick = onRunDiagnostic,
-                isLoading = isLoading
-            )
+            if (isLoading) {
+                // Percentage Progress counter replacing generic loading
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(AppRadius.pill))
+                        .background(AppColors.surfaceAlt)
+                        .border(1.dp, AppColors.primary.copy(alpha = 0.3f), RoundedCornerShape(AppRadius.pill))
+                        .padding(vertical = 12.dp, horizontal = 16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = Translations.tr("running", language),
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = AppColors.primary
+                        )
+                        Text(
+                            text = "$progressPercent%",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = AppColors.primary
+                        )
+                    }
+                }
+            } else {
+                // Quick Diagnostic & Full Diagnostic Buttons
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    DiagnosticActionButton(
+                        text = Translations.tr("quickDiagnostic", language),
+                        onClick = { onRunDiagnostic(DiagnosticMode.QUICK) },
+                        modifier = Modifier.weight(1f)
+                    )
+                    DiagnosticActionButton(
+                        text = Translations.tr("fullDiagnostic", language),
+                        onClick = { onRunDiagnostic(DiagnosticMode.FULL) },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
         }
     }
 }
@@ -1094,7 +1179,7 @@ private fun DiscoveredPppoeGatewayCard(
                                 text = "${"%.1f".format(result.gateway2Latency)} ms",
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = AppColors.green
+                                color = resolvePingLatencyColor("", result.gateway2Latency)
                             )
                         }
                     }
@@ -1260,7 +1345,7 @@ private fun TracerouteHopsCard(
 
 // -------------------------------------------------------------------------
 // Simplified Linear Workflow Diagram
-// Device -> Local Gateway -> Upstream Gateway -> Internet
+// 1. Device -> 2. Home Wifi Router -> 3. Upstream Gateway 1 -> 4. Upstream Gateway 2 -> 5. Internet
 // -------------------------------------------------------------------------
 @Composable
 fun SimplifiedWorkflowDiagram(
@@ -1290,14 +1375,17 @@ fun SimplifiedWorkflowDiagram(
             icon = Icons.Default.Smartphone,
             ip = deviceIp.ifBlank { "127.0.0.1" },
             latencyText = "0.0 ms",
+            latencyMs = 0.0,
             packetLossText = "0.0%",
             statusText = Translations.tr("statusGood", language),
-            statusLevel = "green"
+            statusLevel = "green",
+            themeTint = Color(0xFF0284C7), // Light Blue theme
+            themeBg = Color(0xFFE0F2FE)
         )
 
         WorkflowArrowConnector()
 
-        // 2. Local Gateway (Hop 1)
+        // 2. Home Wifi Router (Hop 1)
         val isLocalGwValid = result.gateway1.isNotBlank() &&
                 result.gateway1 != "0.0.0.0" &&
                 !result.gateway1.equals("Not Connected", ignoreCase = true) &&
@@ -1315,25 +1403,28 @@ fun SimplifiedWorkflowDiagram(
 
         WorkflowHopCard(
             stepNumber = 2,
-            title = Translations.tr("homeRouter", language),
+            title = Translations.tr("homeWifiRouter", language),
             icon = Icons.Default.Router,
             ip = if (isLocalGwValid) result.gateway1 else Translations.tr("statusUnknown", language),
             latencyText = if (isLocalGwValid && (result.localGwStats.isReachable || localLatency > 0)) "${"%.1f".format(localLatency)} ms" else "Timeout",
+            latencyMs = if (isLocalGwValid && (result.localGwStats.isReachable || localLatency > 0)) localLatency else null,
             packetLossText = if (isLocalGwValid) "${"%.1f".format(localLoss)}%" else "100.0%",
             statusText = localStatusText,
-            statusLevel = localStatusLevel
+            statusLevel = localStatusLevel,
+            themeTint = Color(0xFF0D9488), // Teal/Cyan theme
+            themeBg = Color(0xFFCCFBF1)
         )
 
         WorkflowArrowConnector()
 
-        // 3. Upstream Gateway (Hop 2)
-        val isUpstreamConfirmed = (!result.gateway2.isBlank() &&
+        // 3. Upstream Gateway 1 (Hop 2)
+        val isUpstream1Confirmed = (!result.gateway2.isBlank() &&
                 !result.gateway2.equals("Unknown", ignoreCase = true) &&
                 result.gateway2 != "*") ||
                 (result.upstreamDiscovery.detectedIp.isNotBlank() &&
                  !result.upstreamDiscovery.detectedIp.equals("Unknown", ignoreCase = true) &&
                  result.upstreamDiscovery.detectedIp != "*")
-        val upstreamIp = if (isUpstreamConfirmed) {
+        val upstream1Ip = if (isUpstream1Confirmed) {
             if (!result.gateway2.isBlank() && !result.gateway2.equals("Unknown", ignoreCase = true) && result.gateway2 != "*") {
                 result.gateway2
             } else {
@@ -1342,25 +1433,26 @@ fun SimplifiedWorkflowDiagram(
         } else {
             Translations.tr("statusUnknown", language)
         }
-        val upstreamStats = result.upstreamGwStats
-        val upstreamLoss = upstreamStats?.packetLossPercent ?: 0.0
-        val upstreamLatency = if (upstreamStats != null && upstreamStats.isReachable) {
-            upstreamStats.avgMs
+        val upstream1Stats = result.upstreamGwStats
+        val upstream1Loss = upstream1Stats?.packetLossPercent ?: 0.0
+        val upstream1Latency = if (upstream1Stats != null && upstream1Stats.isReachable) {
+            upstream1Stats.avgMs
         } else if (result.gateway2Latency > 0) {
             result.gateway2Latency
         } else {
             0.0
         }
 
-        val upstreamStatusText = when {
-            !isUpstreamConfirmed -> Translations.tr("statusUnknown", language)
-            upstreamStats != null && !upstreamStats.isReachable -> Translations.tr("statusProblem", language)
-            upstreamLoss > 5.0 -> Translations.tr("statusProblem", language)
-            upstreamLatency > 0 -> Translations.tr("statusGood", language)
-            isUpstreamConfirmed -> Translations.tr("statusGood", language)
+        val upstream1StatusText = when {
+            result.isSkippedDueToRouterFailure -> Translations.tr("statusUnknown", language)
+            !isUpstream1Confirmed -> Translations.tr("statusUnknown", language)
+            upstream1Stats != null && !upstream1Stats.isReachable -> Translations.tr("statusProblem", language)
+            upstream1Loss > 5.0 -> Translations.tr("statusProblem", language)
+            upstream1Latency > 0 -> Translations.tr("statusGood", language)
+            isUpstream1Confirmed -> Translations.tr("statusGood", language)
             else -> Translations.tr("statusUnknown", language)
         }
-        val upstreamStatusLevel = when (upstreamStatusText) {
+        val upstream1StatusLevel = when (upstream1StatusText) {
             Translations.tr("statusGood", language) -> "green"
             Translations.tr("statusProblem", language) -> "red"
             else -> "yellow"
@@ -1368,38 +1460,89 @@ fun SimplifiedWorkflowDiagram(
 
         WorkflowHopCard(
             stepNumber = 3,
-            title = Translations.tr("upstreamGateway", language),
+            title = Translations.tr("upstreamGateway1", language),
             icon = Icons.Default.Public,
-            ip = upstreamIp,
-            latencyText = if (isUpstreamConfirmed && upstreamLatency > 0) "${"%.1f".format(upstreamLatency)} ms" else if (isUpstreamConfirmed) "< 5 ms" else Translations.tr("statusUnknown", language),
-            packetLossText = if (isUpstreamConfirmed && upstreamStats != null) "${"%.1f".format(upstreamLoss)}%" else if (isUpstreamConfirmed) "0.0%" else Translations.tr("statusUnknown", language),
-            statusText = upstreamStatusText,
-            statusLevel = upstreamStatusLevel
+            ip = upstream1Ip,
+            latencyText = if (isUpstream1Confirmed && upstream1Latency > 0) "${"%.1f".format(upstream1Latency)} ms" else if (isUpstream1Confirmed) "< 5 ms" else Translations.tr("statusUnknown", language),
+            latencyMs = if (isUpstream1Confirmed && upstream1Latency > 0) upstream1Latency else if (isUpstream1Confirmed) 4.0 else null,
+            packetLossText = if (isUpstream1Confirmed && upstream1Stats != null) "${"%.1f".format(upstream1Loss)}%" else if (isUpstream1Confirmed) "0.0%" else Translations.tr("statusUnknown", language),
+            statusText = upstream1StatusText,
+            statusLevel = upstream1StatusLevel,
+            themeTint = Color(0xFF6366F1), // Soft Purple/Indigo theme
+            themeBg = Color(0xFFEEF2FF)
         )
 
         WorkflowArrowConnector()
 
-        // 4. Internet
+        // 4. Upstream Gateway 2 (Hop 3)
+        val gw2Stats = result.upstreamGw2Stats
+        val isUpstream2Confirmed = gw2Stats != null && gw2Stats.host.isNotBlank() &&
+                !gw2Stats.host.equals("Unknown", ignoreCase = true) &&
+                gw2Stats.host != "*"
+        val upstream2Ip = if (isUpstream2Confirmed && gw2Stats != null) gw2Stats.host else Translations.tr("statusUnknown", language)
+        val upstream2Loss = gw2Stats?.packetLossPercent ?: 0.0
+        val upstream2Latency = if (gw2Stats != null && gw2Stats.isReachable) gw2Stats.avgMs else 0.0
+
+        val upstream2StatusText = when {
+            result.isSkippedDueToRouterFailure -> Translations.tr("statusUnknown", language)
+            !isUpstream2Confirmed -> Translations.tr("statusUnknown", language)
+            gw2Stats != null && !gw2Stats.isReachable -> Translations.tr("statusProblem", language)
+            upstream2Loss > 5.0 -> Translations.tr("statusProblem", language)
+            upstream2Latency > 0 -> Translations.tr("statusGood", language)
+            isUpstream2Confirmed -> Translations.tr("statusGood", language)
+            else -> Translations.tr("statusUnknown", language)
+        }
+        val upstream2StatusLevel = when (upstream2StatusText) {
+            Translations.tr("statusGood", language) -> "green"
+            Translations.tr("statusProblem", language) -> "red"
+            else -> "yellow"
+        }
+
+        WorkflowHopCard(
+            stepNumber = 4,
+            title = Translations.tr("upstreamGateway2", language),
+            icon = Icons.Default.Hub,
+            ip = upstream2Ip,
+            latencyText = if (isUpstream2Confirmed && upstream2Latency > 0) "${"%.1f".format(upstream2Latency)} ms" else if (isUpstream2Confirmed) "< 10 ms" else Translations.tr("statusUnknown", language),
+            latencyMs = if (isUpstream2Confirmed && upstream2Latency > 0) upstream2Latency else if (isUpstream2Confirmed) 8.0 else null,
+            packetLossText = if (isUpstream2Confirmed && gw2Stats != null) "${"%.1f".format(upstream2Loss)}%" else if (isUpstream2Confirmed) "0.0%" else Translations.tr("statusUnknown", language),
+            statusText = upstream2StatusText,
+            statusLevel = upstream2StatusLevel,
+            themeTint = Color(0xFF8B5CF6), // Purple/Violet theme
+            themeBg = Color(0xFFF3E8FF)
+        )
+
+        WorkflowArrowConnector()
+
+        // 5. Internet
         val targetStats = result.internetTargetStats
         val internetReachable = targetStats.isReachable || result.secondaryTargetStats.isReachable
         val internetLoss = targetStats.packetLossPercent
         val internetLatency = if (targetStats.isReachable) targetStats.avgMs else result.secondaryTargetStats.avgMs
         val internetStatusText = when {
+            result.isSkippedDueToRouterFailure -> Translations.tr("statusUnknown", language)
             internetReachable && internetLoss < 5.0 -> Translations.tr("statusGood", language)
             internetReachable -> Translations.tr("statusProblem", language)
             else -> Translations.tr("statusProblem", language)
         }
-        val internetStatusLevel = if (internetStatusText == Translations.tr("statusGood", language)) "green" else "red"
+        val internetStatusLevel = when {
+            result.isSkippedDueToRouterFailure -> "yellow"
+            internetStatusText == Translations.tr("statusGood", language) -> "green"
+            else -> "red"
+        }
 
         WorkflowHopCard(
-            stepNumber = 4,
+            stepNumber = 5,
             title = Translations.tr("internet", language),
             icon = Icons.Default.Cloud,
             ip = if (targetStats.host.isNotBlank()) targetStats.host else "8.8.8.8",
             latencyText = if (internetReachable) "${"%.1f".format(internetLatency)} ms" else "Timeout",
+            latencyMs = if (internetReachable) internetLatency else null,
             packetLossText = "${"%.1f".format(internetLoss)}%",
             statusText = internetStatusText,
-            statusLevel = internetStatusLevel
+            statusLevel = internetStatusLevel,
+            themeTint = Color(0xFF10B981), // Green theme
+            themeBg = Color(0xFFD1FAE5)
         )
     }
 }
@@ -1437,6 +1580,28 @@ private fun WorkflowArrowConnector() {
     }
 }
 
+private fun resolvePingLatencyColor(latencyText: String, latencyMs: Double? = null): Color {
+    val green = Color(0xFF10B981) // Green (#10B981 / #4CAF50)
+    val amber = Color(0xFFF59E0B) // Amber/Orange (#F59E0B)
+    val red = Color(0xFFEF4444)   // Red (#EF4444)
+
+    val lower = latencyText.lowercase().trim()
+    if (lower.contains("timeout") || lower.contains("fail") || lower.contains("problem") || lower.contains("unknown") || lower.contains("অজানা")) {
+        return red
+    }
+    if (lower.startsWith("<")) {
+        return green
+    }
+
+    val msValue = latencyMs ?: lower.replace("ms", "").trim().toDoubleOrNull()
+    return when {
+        msValue == null -> red
+        msValue <= 30.0 -> green
+        msValue <= 80.0 -> amber
+        else -> red
+    }
+}
+
 @Composable
 private fun WorkflowHopCard(
     stepNumber: Int,
@@ -1446,19 +1611,11 @@ private fun WorkflowHopCard(
     latencyText: String,
     packetLossText: String,
     statusText: String,
-    statusLevel: String
+    statusLevel: String,
+    themeTint: Color = AppColors.primary,
+    themeBg: Color = AppColors.primarySoft,
+    latencyMs: Double? = null
 ) {
-    val statusColor = when (statusLevel) {
-        "green" -> AppColors.green
-        "yellow" -> AppColors.yellow
-        else -> AppColors.red
-    }
-    val statusBg = when (statusLevel) {
-        "green" -> AppColors.greenSoft
-        "yellow" -> AppColors.yellowSoft
-        else -> AppColors.redSoft
-    }
-
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -1472,7 +1629,7 @@ private fun WorkflowHopCard(
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp, vertical = 10.dp)
         ) {
-            // Top Row: Icon + Title + Status Tag
+            // Top Row: Distinctly Themed Icon + Title + Status Tag
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -1485,16 +1642,17 @@ private fun WorkflowHopCard(
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(32.dp)
+                            .size(34.dp)
                             .clip(CircleShape)
-                            .background(statusBg),
+                            .background(themeBg)
+                            .border(1.dp, themeTint.copy(alpha = 0.25f), CircleShape),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = icon,
                             contentDescription = null,
-                            tint = statusColor,
-                            modifier = Modifier.size(17.dp)
+                            tint = themeTint,
+                            modifier = Modifier.size(18.dp)
                         )
                     }
 
@@ -1522,7 +1680,7 @@ private fun WorkflowHopCard(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Details Grid: IP Address, Ping Latency, Packet Loss
+            // Details Grid: IP Address, Dynamic Ping Latency, Packet Loss
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -1556,7 +1714,7 @@ private fun WorkflowHopCard(
                         text = latencyText,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
-                        color = if (latencyText.contains("Timeout") || latencyText.contains("Unknown")) AppColors.inkMuted else AppColors.ink
+                        color = resolvePingLatencyColor(latencyText, latencyMs)
                     )
                 }
 
@@ -1573,9 +1731,9 @@ private fun WorkflowHopCard(
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
                         color = when {
-                            packetLossText.startsWith("0") -> AppColors.green
-                            packetLossText.contains("Unknown") -> AppColors.inkMuted
-                            else -> AppColors.red
+                            packetLossText.contains("100") || packetLossText.contains("Unknown") || packetLossText.contains("অজানা") -> AppColors.red
+                            (packetLossText.replace("%", "").trim().toDoubleOrNull() ?: 0.0) > 5.0 -> AppColors.red
+                            else -> AppColors.green
                         }
                     )
                 }
@@ -1776,8 +1934,9 @@ private fun TtlStepCard(
 private fun InitialInfographicPreviewCard(
     deviceIp: String,
     language: AppLanguage,
-    onRunDiagnostic: () -> Unit,
-    isLoading: Boolean
+    onRunDiagnostic: (DiagnosticMode) -> Unit,
+    isLoading: Boolean,
+    progressPercent: Int = 0
 ) {
     CardContainer {
         Column(
@@ -1816,9 +1975,9 @@ private fun InitialInfographicPreviewCard(
                     )
                     Text(
                         text = if (language == AppLanguage.BN)
-                            "ডুয়াল গেটওয়ে ও টিটিএল হপ ম্যাপিং"
+                            "৫-নোড নেটওয়ার্ক পাথ বিশ্লেষণ ও ডায়াগনস্টিক"
                         else
-                            "Dual Gateway & TTL Hop Visualization",
+                            "5-Node Network Path Analysis & Diagnostics",
                         fontSize = 12.sp,
                         color = AppColors.inkMuted
                     )
@@ -1829,9 +1988,9 @@ private fun InitialInfographicPreviewCard(
 
             Text(
                 text = if (language == AppLanguage.BN)
-                    "হোম রাউটার (Gateway 1) এবং আইএসপি ব্যাকবোন (Gateway 2) এর লাইভ রুট মানচিত্র তৈরি করতে ডায়াগনস্টিক চালান"
+                    "ডিভাইস ➔ হোম ওয়াইফাই রাউটার ➔ আপস্ট্রিম গেটওয়ে ১ ➔ আপস্ট্রিম গেটওয়ে ২ ➔ ইন্টারনেট এর লাইভ পাথ মানচিত্র দেখতে ডায়াগনস্টিক চালান"
                 else
-                    "Run diagnostic to generate an infographic map of Home Router (Gateway 1) and ISP Backbone (Gateway 2)",
+                    "Run diagnostic to generate an infographic map of Device ➔ Home Wifi Router ➔ Upstream Gateway 1 ➔ Upstream Gateway 2 ➔ Internet",
                 fontSize = 12.sp,
                 color = AppColors.inkMuted,
                 textAlign = TextAlign.Center,
@@ -1840,36 +1999,78 @@ private fun InitialInfographicPreviewCard(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Topology preview sketch
+            // 5-Node Topology preview sketch
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(AppRadius.md))
                     .background(AppColors.surfaceAlt)
                     .border(1.dp, AppColors.border, RoundedCornerShape(AppRadius.md))
-                    .padding(vertical = 14.dp, horizontal = 8.dp),
+                    .padding(vertical = 14.dp, horizontal = 4.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                PreviewNodeIcon(Icons.Default.Smartphone, "Device", Color(0xFF475569))
-                Text("➔", color = AppColors.inkMuted, fontSize = 14.sp)
-                PreviewNodeIcon(Icons.Default.Router, "GW 1", AppColors.green)
-                Text("➔", color = AppColors.inkMuted, fontSize = 14.sp)
-                PreviewNodeIcon(Icons.Default.Public, "GW 2", AppColors.blue)
-                Text("➔", color = AppColors.inkMuted, fontSize = 14.sp)
-                PreviewNodeIcon(Icons.Default.Cloud, "Cloud", AppColors.primary)
+                PreviewNodeIcon(Icons.Default.Smartphone, "Device", Color(0xFF0284C7))
+                Text("➔", color = AppColors.inkMuted, fontSize = 12.sp)
+                PreviewNodeIcon(Icons.Default.Router, "Router", Color(0xFF0D9488))
+                Text("➔", color = AppColors.inkMuted, fontSize = 12.sp)
+                PreviewNodeIcon(Icons.Default.Public, "GW 1", Color(0xFF6366F1))
+                Text("➔", color = AppColors.inkMuted, fontSize = 12.sp)
+                PreviewNodeIcon(Icons.Default.Hub, "GW 2", Color(0xFF8B5CF6))
+                Text("➔", color = AppColors.inkMuted, fontSize = 12.sp)
+                PreviewNodeIcon(Icons.Default.Cloud, "Internet", Color(0xFF10B981))
             }
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            PrimaryButton(
-                text = if (isLoading)
-                    Translations.tr("running", language)
-                else
-                    Translations.tr("runDiagnostic", language),
-                onClick = onRunDiagnostic,
-                isLoading = isLoading
-            )
+            if (isLoading) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(AppRadius.pill))
+                        .background(AppColors.surfaceAlt)
+                        .border(1.dp, AppColors.primary.copy(alpha = 0.3f), RoundedCornerShape(AppRadius.pill))
+                        .padding(vertical = 12.dp, horizontal = 16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = Translations.tr("running", language),
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = AppColors.primary
+                        )
+                        Text(
+                            text = "$progressPercent%",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = AppColors.primary
+                        )
+                    }
+                }
+            } else {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    DiagnosticActionButton(
+                        text = Translations.tr("quickDiagnostic", language),
+                        onClick = { onRunDiagnostic(DiagnosticMode.QUICK) },
+                        modifier = Modifier.weight(1f)
+                    )
+                    DiagnosticActionButton(
+                        text = Translations.tr("fullDiagnostic", language),
+                        onClick = { onRunDiagnostic(DiagnosticMode.FULL) },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
         }
     }
 }

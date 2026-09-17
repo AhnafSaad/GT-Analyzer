@@ -66,6 +66,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _isDiagnosticLoading = MutableStateFlow(false)
     val isDiagnosticLoading = _isDiagnosticLoading.asStateFlow()
 
+    private val _diagnosticProgress = MutableStateFlow(0)
+    val diagnosticProgress = _diagnosticProgress.asStateFlow()
+
     // Dialog state for server URL
     private val _showServerDialog = MutableStateFlow(false)
     val showServerDialog = _showServerDialog.asStateFlow()
@@ -215,12 +218,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         speedTestManager.stopSpeedTest()
     }
 
-    // --- Diagnostic (6th Tab) ---
-    fun runDiagnostic() {
+    // --- Diagnostic ---
+    fun runDiagnostic(mode: DiagnosticMode = DiagnosticMode.QUICK) {
         viewModelScope.launch {
             _isDiagnosticLoading.value = true
-            val res = diagnosticRepo.runDiagnostic(getApplication())
+            _diagnosticProgress.value = 0
+            val res = diagnosticRepo.runDiagnostic(
+                context = getApplication(),
+                mode = mode,
+                onProgress = { percent ->
+                    _diagnosticProgress.value = percent
+                }
+            )
             _diagnosticResult.value = res
+            _diagnosticProgress.value = 100
             _isDiagnosticLoading.value = false
         }
     }

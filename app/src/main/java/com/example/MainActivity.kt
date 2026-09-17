@@ -46,6 +46,7 @@ class MainActivity : ComponentActivity() {
                 val speedTestState by viewModel.speedTestState.collectAsStateWithLifecycle()
                 val diagnosticResult by viewModel.diagnosticResult.collectAsStateWithLifecycle()
                 val isDiagnosticLoading by viewModel.isDiagnosticLoading.collectAsStateWithLifecycle()
+                val diagnosticProgress by viewModel.diagnosticProgress.collectAsStateWithLifecycle()
 
                 // Automatic Location Permission Popup on App Start
                 val context = LocalContext.current
@@ -117,7 +118,8 @@ class MainActivity : ComponentActivity() {
                                         pingMetrics = pingMetrics,
                                         thresholds = viewModel.configRepo.thresholds,
                                         language = language,
-                                        onRefresh = { viewModel.refreshAll() }
+                                        onRefresh = { viewModel.refreshAll() },
+                                        onNavigateToDiagnostic = { viewModel.selectTab(AppTab.DIAGNOSTIC) }
                                     )
                                 }
                                 AppTab.DNS -> {
@@ -135,21 +137,14 @@ class MainActivity : ComponentActivity() {
                                         onScan = { viewModel.scanNearbyNetworks() }
                                     )
                                 }
-                                AppTab.SPEED -> {
-                                    SpeedTestScreen(
-                                        state = speedTestState,
-                                        language = language,
-                                        onStartTest = { viewModel.startSpeedTest() },
-                                        onStopTest = { viewModel.stopSpeedTest() }
-                                    )
-                                }
                                 AppTab.DIAGNOSTIC -> {
                                     DiagnosticScreen(
                                         result = diagnosticResult,
                                         isLoading = isDiagnosticLoading,
+                                        progressPercent = diagnosticProgress,
                                         deviceIp = wifiInfo.ipAddress,
                                         language = language,
-                                        onRunDiagnostic = { viewModel.runDiagnostic() }
+                                        onRunDiagnostic = { mode -> viewModel.runDiagnostic(mode) }
                                     )
                                 }
                             }

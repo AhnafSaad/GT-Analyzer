@@ -18,9 +18,13 @@ class DiagnosticRepository(
         .readTimeout(4, TimeUnit.SECONDS)
         .build()
 
-    suspend fun runDiagnostic(context: Context): DiagnosticResult = withContext(Dispatchers.IO) {
+    suspend fun runDiagnostic(
+        context: Context,
+        mode: DiagnosticMode = DiagnosticMode.QUICK,
+        onProgress: (Int) -> Unit = {}
+    ): DiagnosticResult = withContext(Dispatchers.IO) {
         // On-device multi-stage differential diagnostic
-        runOnDeviceDiagnostic(context)
+        runOnDeviceDiagnostic(context, mode, onProgress)
     }
 
     private fun parseDiagnosticJson(jsonStr: String): DiagnosticResult? {
@@ -72,31 +76,72 @@ class DiagnosticRepository(
         }
     }
 
-    private suspend fun runOnDeviceDiagnostic(context: Context): DiagnosticResult {
-        // Stage 1: Detect local default gateway (GW1) and client IP
+    private suspend fun runOnDeviceDiagnostic(
+        context: Context,
+        mode: DiagnosticMode = DiagnosticMode.QUICK,
+        onProgress: (Int) -> Unit = {}
+    ): DiagnosticResult {
+        val packetCount = mode.packetCount
+        onProgress(5)
+
+        // Stage 1: Detect local default gateway (Home Wifi Router) and client IP
         val localGwIp = NetworkUtils.getDefaultGateway(context).trim()
         val isLocalGwValid = localGwIp.isNotBlank() && localGwIp != "0.0.0.0"
         val clientIp = NetworkUtils.getConnectedWifiInfo(context).ipAddress
+        onProgress(15)
 
-        // Stage 2: Test Local Gateway Health with repeated probes (4 probes)
+        // Stage 2: Test Home Wifi Router Health with mode packet count
         val localGwStats = if (isLocalGwValid) {
-            NetworkUtils.measureHostHealth(localGwIp, label = "Local Gateway (GW1)", count = 4, timeoutMs = 800)
+            NetworkUtils.measureHostHealth(localGwIp, label = "Home Wifi Router", count = packetCount, timeoutMs = 800)
         } else {
             ProbeStats(
                 host = "Disconnected",
-                label = "Local Gateway",
-                transmitted = 4,
+                label = "Home Wifi Router",
+                transmitted = packetCount,
                 received = 0,
                 packetLossPercent = 100.0,
                 isReachable = false
+            )
+        }
+        onProgress(30)
+
+        // Smart Skip Logic: If ping to "Home Wifi Router" fails (100% loss/unreachable), halt scan immediately and skip nodes 3, 4, and 5
+        val isHomeRouterFailed = !isLocalGwValid || !localGwStats.isReachable || localGwStats.packetLossPercent >= 100.0 || (localGwStats.transmitted > 0 && localGwStats.received == 0)
+        if (isHomeRouterFailed) {
+            onProgress(100)
+            val evidenceList = mutableListOf(
+                DiagnosticEvidenceItem(
+                    title = "Home Wifi Router Link",
+                    detail = "Unreachable (100% packet loss to router ${localGwStats.host})",
+                    passed = false
+                )
+            )
+            return DiagnosticResult(
+                gateway1 = if (isLocalGwValid) localGwIp else "Not Connected",
+                gateway2 = "Unknown",
+                gateway1Latency = -1.0,
+                gateway2Latency = 0.0,
+                localGwStats = localGwStats,
+                upstreamGwStats = null,
+                upstreamGw2Stats = null,
+                hops = emptyList(),
+                diagnosisType = DiagnosisType.LOCAL_LAN_ISSUE,
+                diagnosisTitle = "Home Wifi Router Issue",
+                diagnosisSummary = "আপনার ডিভাইস থেকে হোম রাউটারে সমস্যা। এটি ঠিক করে তারপর আবার ডায়াগনস্টিক দিন।",
+                evidenceList = evidenceList,
+                error = "Home Wifi Router Unreachable",
+                isFromBackend = false,
+                isSkippedDueToRouterFailure = true,
+                mode = mode
             )
         }
 
         // Stage 3: Collect Traceroute Path Information (Primary Target)
         val targetPrimary = configRepository.pingTarget.ifBlank { "8.8.8.8" }
         val traceHops = NetworkUtils.executeTraceroute(target = targetPrimary, maxHops = 10)
+        onProgress(50)
 
-        // Stage 4: Multi-Method Client-Side Upstream Gateway Discovery & Correlation
+        // Stage 4: Multi-Method Client-Side Upstream Gateway Discovery & Correlation (Upstream Gateway 1)
         val upstreamDiscoveryRaw = upstreamGatewayProvider.discoverUpstreamGateway(
             context = context,
             localGateway = localGwIp,
@@ -104,7 +149,6 @@ class DiagnosticRepository(
             primaryHops = traceHops
         )
 
-        // If traceHops has an IP at Hop 2 (or any candidate hop), ensure it is saved and confirmed
         val hop2Ip = traceHops.getOrNull(1)?.ip?.takeIf { it != "*" && it.isNotBlank() && !it.equals("Unknown", ignoreCase = true) }
         val detectedUpstream = upstreamDiscoveryRaw.detectedIp.takeIf { it.isNotBlank() && it != "*" && !it.equals("Unknown", ignoreCase = true) }
             ?: hop2Ip
@@ -128,21 +172,41 @@ class DiagnosticRepository(
         val upstreamGwStats = if (upstreamGwDisplay != "Unknown") {
             NetworkUtils.measureHostHealth(
                 upstreamGwDisplay,
-                label = "Upstream Gateway (GW2)",
-                count = 4,
-                timeoutMs = 2000
+                label = "Upstream Gateway 1",
+                count = packetCount,
+                timeoutMs = 1500
             )
         } else {
             null
         }
+        onProgress(70)
 
-        // Stage 5: Test Internet targets (Primary & Secondary) with repeated probes (4 probes each)
-        val primaryStats = NetworkUtils.measureHostHealth(targetPrimary, label = "Internet Primary ($targetPrimary)", count = 4, timeoutMs = 1000)
+        // Stage 5: Discover & Probe Upstream Gateway 2 (Hop 3 or subsequent gateway hop)
+        val hop3Ip = traceHops.getOrNull(2)?.ip?.takeIf {
+            it != "*" && it.isNotBlank() && !it.equals("Unknown", ignoreCase = true) && it != upstreamGwDisplay && it != localGwIp
+        } ?: traceHops.firstOrNull {
+            it.hop > 2 && it.ip != "*" && it.ip.isNotBlank() && !it.ip.equals("Unknown", ignoreCase = true) && it.ip != upstreamGwDisplay && it.ip != localGwIp
+        }?.ip
 
+        val upstreamGw2Stats = if (!hop3Ip.isNullOrBlank()) {
+            NetworkUtils.measureHostHealth(
+                hop3Ip,
+                label = "Upstream Gateway 2",
+                count = packetCount,
+                timeoutMs = 1500
+            )
+        } else {
+            null
+        }
+        onProgress(85)
+
+        // Stage 6: Test Internet targets (Primary & Secondary) with repeated probes
+        val primaryStats = NetworkUtils.measureHostHealth(targetPrimary, label = "Internet Primary ($targetPrimary)", count = packetCount, timeoutMs = 1000)
         val targetSecondary = "1.1.1.1"
-        val secondaryStats = NetworkUtils.measureHostHealth(targetSecondary, label = "Internet Secondary ($targetSecondary)", count = 4, timeoutMs = 1000)
+        val secondaryStats = NetworkUtils.measureHostHealth(targetSecondary, label = "Internet Secondary ($targetSecondary)", count = packetCount, timeoutMs = 1000)
+        onProgress(95)
 
-        // Stage 6: Differential Diagnostic Decision Engine
+        // Stage 7: Differential Diagnostic Decision Engine
         val evidenceList = mutableListOf<DiagnosticEvidenceItem>()
         val diagnosis = evaluateDiagnosis(
             isLocalGwValid = isLocalGwValid,
@@ -154,6 +218,7 @@ class DiagnosticRepository(
             traceHops = traceHops,
             evidenceList = evidenceList
         )
+        onProgress(100)
 
         return DiagnosticResult(
             gateway1 = if (isLocalGwValid) localGwIp else "Not Connected",
@@ -162,6 +227,7 @@ class DiagnosticRepository(
             gateway2Latency = upstreamGwStats?.avgMs ?: 0.0,
             localGwStats = localGwStats,
             upstreamGwStats = upstreamGwStats,
+            upstreamGw2Stats = upstreamGw2Stats,
             internetTargetStats = primaryStats,
             secondaryTargetStats = secondaryStats,
             hops = traceHops,
@@ -171,7 +237,9 @@ class DiagnosticRepository(
             diagnosisSummary = diagnosis.summary,
             evidenceList = evidenceList,
             error = if (!isLocalGwValid) "Local network interface is down" else null,
-            isFromBackend = false
+            isFromBackend = false,
+            isSkippedDueToRouterFailure = false,
+            mode = mode
         )
     }
 

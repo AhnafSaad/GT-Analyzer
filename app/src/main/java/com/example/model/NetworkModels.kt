@@ -107,6 +107,7 @@ enum class UpstreamConfidence {
 }
 
 enum class UpstreamDetectionMethod {
+    ROUTER_STATUS_PAGE_SCRAPE,
     UPNP_IGD_WAN_SERVICE,
     TTL_HOP2_TRACEROUTE,
     OS_ROUTING_TABLE,
@@ -145,13 +146,19 @@ data class DiagnosticEvidenceItem(
     val isWarning: Boolean = false
 )
 
+enum class DiagnosticMode(val packetCount: Int, val titleKey: String) {
+    QUICK(packetCount = 3, titleKey = "quickDiagnostic"),
+    FULL(packetCount = 10, titleKey = "fullDiagnostic")
+}
+
 data class DiagnosticResult(
     val gateway1: String = "192.168.0.1",
     val gateway2: String = "Unknown",
     val gateway2Latency: Double = 0.0,
     val gateway1Latency: Double = 0.0,
-    val localGwStats: ProbeStats = ProbeStats(host = gateway1, label = "Local Gateway"),
+    val localGwStats: ProbeStats = ProbeStats(host = gateway1, label = "Home Wifi Router"),
     val upstreamGwStats: ProbeStats? = null,
+    val upstreamGw2Stats: ProbeStats? = null,
     val internetTargetStats: ProbeStats = ProbeStats(host = "8.8.8.8", label = "Internet (Primary)"),
     val secondaryTargetStats: ProbeStats = ProbeStats(host = "1.1.1.1", label = "Internet (Secondary)"),
     val hops: List<DiagnosticHop> = emptyList(),
@@ -161,7 +168,9 @@ data class DiagnosticResult(
     val diagnosisSummary: String = "All measured network segments are responsive with low latency and 0% packet loss.",
     val evidenceList: List<DiagnosticEvidenceItem> = emptyList(),
     val error: String? = null,
-    val isFromBackend: Boolean = false
+    val isFromBackend: Boolean = false,
+    val isSkippedDueToRouterFailure: Boolean = false,
+    val mode: DiagnosticMode = DiagnosticMode.QUICK
 )
 
 enum class SpeedPhase {

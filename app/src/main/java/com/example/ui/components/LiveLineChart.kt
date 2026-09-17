@@ -1,5 +1,7 @@
 package com.example.ui.components
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -7,6 +9,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -33,9 +36,32 @@ fun LiveLineChart(
     modifier: Modifier = Modifier
 ) {
     val cleanData = if (data.isEmpty()) listOf(0.0, 0.0) else data
-    val minVal = cleanData.minOrNull() ?: 0.0
-    val maxVal = (cleanData.maxOrNull() ?: 100.0).coerceAtLeast(minVal + 10.0)
+    val isDbm = unit.contains("dBm", ignoreCase = true) || cleanData.any { it < 0 }
+
+    // Dynamic color resolution based on real-time dBm threshold rules
+    val dynamicDbmColor = if (isDbm) {
+        val latestVal = cleanData.lastOrNull() ?: -60.0
+        when {
+            latestVal >= -50.0 -> Color(0xFF10B981) // Green (#10B981)
+            latestVal >= -65.0 -> Color(0xFFF59E0B) // Amber / Orange (#F59E0B)
+            else -> Color(0xFFEF4444)             // Red (#EF4444)
+        }
+    } else {
+        lineColor
+    }
+
+    val effectiveColor = if (isDbm) dynamicDbmColor else lineColor
+
+    val animatedLineColor by animateColorAsState(
+        targetValue = effectiveColor,
+        animationSpec = tween(durationMillis = 300),
+        label = "chartColorAnimation"
+    )
+
+    val minVal = if (isDbm) -100.0 else (cleanData.minOrNull() ?: 0.0)
+    val maxVal = if (isDbm) -30.0 else (cleanData.maxOrNull() ?: 100.0).coerceAtLeast(minVal + 10.0)
     val avgVal = cleanData.average()
+    val displayMax = cleanData.maxOrNull() ?: 0.0
 
     Column(
         modifier = modifier
@@ -64,7 +90,7 @@ fun LiveLineChart(
                     color = AppColors.inkSoft
                 )
                 Text(
-                    text = "Max: ${"%.1f".format(maxVal)} $unit",
+                    text = "Max: ${"%.1f".format(displayMax)} $unit",
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = AppColors.inkMuted
@@ -85,14 +111,19 @@ fun LiveLineChart(
             if (pointsCount < 2) return@Canvas
 
             val stepX = width / (pointsCount - 1).toFloat()
-            val valRange = (maxVal - minVal).toFloat().coerceAtLeast(1f)
 
             val linePath = Path()
             val fillPath = Path()
 
             val points = cleanData.mapIndexed { idx, v ->
                 val x = idx * stepX
-                val normalized = ((v - minVal).toFloat() / valRange).coerceIn(0f, 1f)
+                val normalized = if (isDbm) {
+                    val clampedDbm = v.toFloat().coerceIn(-100f, -30f)
+                    ((clampedDbm - (-100f)) / (-30f - (-100f))).coerceIn(0f, 1f)
+                } else {
+                    val valRange = (maxVal - minVal).toFloat().coerceAtLeast(1f)
+                    ((v.toFloat() - minVal.toFloat()) / valRange).coerceIn(0f, 1f)
+                }
                 val y = height - (normalized * (height - 10.dp.toPx())) - 5.dp.toPx()
                 Offset(x, y)
             }
@@ -118,8 +149,8 @@ fun LiveLineChart(
                 path = fillPath,
                 brush = Brush.verticalGradient(
                     colors = listOf(
-                        lineColor.copy(alpha = 0.25f),
-                        lineColor.copy(alpha = 0.02f)
+                        animatedLineColor.copy(alpha = 0.28f),
+                        animatedLineColor.copy(alpha = 0.02f)
                     )
                 )
             )
@@ -127,7 +158,7 @@ fun LiveLineChart(
             // Draw line
             drawPath(
                 path = linePath,
-                color = lineColor,
+                color = animatedLineColor,
                 style = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round)
             )
 
@@ -139,7 +170,7 @@ fun LiveLineChart(
                 center = lastPoint
             )
             drawCircle(
-                color = lineColor,
+                color = animatedLineColor,
                 radius = 3.dp.toPx(),
                 center = lastPoint
             )

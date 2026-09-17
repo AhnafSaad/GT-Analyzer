@@ -1,7 +1,7 @@
 <resources>
-    <string name="app_name">GT Wifi Analyzer</string>
+    <string name="app_name">YT Analyzer</string>
     <string name="troubleshooting_title">Troubleshooting Note</string>
-    <string name="troubleshooting_router_issue">Problem connecting from your device to the home router.</string>
+    <string name="troubleshooting_router_issue">Problem connecting from your device to the home router. Fix this and then run diagnostic again.</string>
     <string name="troubleshooting_upstream_issue">Problem connecting from your router to the next device.</string>
     <string name="troubleshooting_internet_issue">Internet connection issue, please contact your ISP.</string>
     <string name="troubleshooting_success">Your network connection is completely normal.</string>

@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">জিটি ওয়াইফাই অ্যানালাইজার</string>
+    <string name="app_name">ওয়াইটি অ্যানালাইজার</string>
     <string name="troubleshooting_title">ট্রাবলশুটিং নোট</string>
-    <string name="troubleshooting_router_issue">আপনার ডিভাইস থেকে হোম রাউটারে সমস্যা।</string>
+    <string name="troubleshooting_router_issue">আপনার ডিভাইস থেকে হোম রাউটারে সমস্যা। এটি ঠিক করে তারপর আবার ডায়াগনস্টিক দিন।</string>
     <string name="troubleshooting_upstream_issue">আপনার রাউটার থেকে পরবর্তি ডিভাইসে সমস্যা।</string>
     <string name="troubleshooting_internet_issue">আপনার ইন্টারনেটে সমস্যা, আইএসপি (ISP)-এর সাথে যোগাযোগ করুন।</string>
     <string name="troubleshooting_success">আপনার নেটওয়ার্ক সংযোগ সম্পূর্ণ স্বাভাবিক আছে।</string>

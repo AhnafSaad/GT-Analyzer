@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "GT Wifi Analyzer"
+rootProject.name = "YT Analyzer"
 
 include(":app")

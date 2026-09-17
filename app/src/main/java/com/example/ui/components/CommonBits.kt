@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.sp
 import com.example.ui.theme.AppColors
 import com.example.ui.theme.AppRadius
 import com.example.ui.theme.AppSpacing
+import com.example.ui.theme.StatusPalette
 import com.example.ui.theme.getStatusColors
 
 @Composable
@@ -87,9 +88,18 @@ fun VerdictBadge(
     title: String,
     scoreText: String,
     level: String,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    customColor: Color? = null
 ) {
-    val palette = getStatusColors(level)
+    val palette = if (customColor != null) {
+        StatusPalette(
+            main = customColor,
+            soft = customColor.copy(alpha = 0.12f),
+            border = customColor.copy(alpha = 0.35f)
+        )
+    } else {
+        getStatusColors(level)
+    }
     Row(
         modifier = modifier
             .fillMaxWidth()

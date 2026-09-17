@@ -7,7 +7,7 @@ enum class AppLanguage(val code: String, val label: String) {
 
 object Translations {
     private val strings = mapOf(
-        "appName" to mapOf(AppLanguage.BN to "GT Wifi Analyzer", AppLanguage.EN to "GT Wifi Analyzer"),
+        "appName" to mapOf(AppLanguage.BN to "YT Analyzer", AppLanguage.EN to "YT Analyzer"),
         "dashboard" to mapOf(AppLanguage.BN to "ড্যাশবোর্ড", AppLanguage.EN to "Dashboard"),
         "gaming" to mapOf(AppLanguage.BN to "গেমিং", AppLanguage.EN to "Gaming"),
         "dns" to mapOf(AppLanguage.BN to "ডিএনএস", AppLanguage.EN to "DNS Check"),
@@ -15,11 +15,17 @@ object Translations {
         "speed" to mapOf(AppLanguage.BN to "স্পিড", AppLanguage.EN to "Speed"),
         "diagnostic" to mapOf(AppLanguage.BN to "ডায়াগনস্টিক", AppLanguage.EN to "Diagnostic"),
         "runDiagnostic" to mapOf(AppLanguage.BN to "ডায়াগনস্টিক চালান", AppLanguage.EN to "Run Diagnostic"),
+        "runDiagnosticShortcut" to mapOf(AppLanguage.BN to "ডায়াগনস্টিক করুন", AppLanguage.EN to "Run Diagnostic"),
+        "quickDiagnostic" to mapOf(AppLanguage.BN to "কুইক ডায়াগনস্টিক", AppLanguage.EN to "Quick Diagnostic"),
+        "fullDiagnostic" to mapOf(AppLanguage.BN to "ফুল ডায়াগনস্টিক", AppLanguage.EN to "Full Diagnostic"),
         "running" to mapOf(AppLanguage.BN to "চলছে...", AppLanguage.EN to "Running..."),
-        "homeRouter" to mapOf(AppLanguage.BN to "হোম রাউটার", AppLanguage.EN to "Home Router"),
+        "homeRouter" to mapOf(AppLanguage.BN to "হোম ওয়াইফাই রাউটার", AppLanguage.EN to "Home Wifi Router"),
+        "homeWifiRouter" to mapOf(AppLanguage.BN to "হোম ওয়াইফাই রাউটার", AppLanguage.EN to "Home Wifi Router"),
+        "upstreamGateway1" to mapOf(AppLanguage.BN to "আপস্ট্রিম গেটওয়ে ১", AppLanguage.EN to "Upstream Gateway 1"),
+        "upstreamGateway2" to mapOf(AppLanguage.BN to "আপস্ট্রিম গেটওয়ে ২", AppLanguage.EN to "Upstream Gateway 2"),
         "ispRouter" to mapOf(AppLanguage.BN to "আইএসপি রাউটার", AppLanguage.EN to "ISP Router"),
         "localGateway" to mapOf(AppLanguage.BN to "লোকাল গেটওয়ে", AppLanguage.EN to "Local Gateway"),
-        "upstreamGateway" to mapOf(AppLanguage.BN to "আপস্ট্রিম গেটওয়ে", AppLanguage.EN to "Upstream Gateway"),
+        "upstreamGateway" to mapOf(AppLanguage.BN to "পরবর্তি ডিভাইস", AppLanguage.EN to "Next Device"),
         "ipAddress" to mapOf(AppLanguage.BN to "আইপি অ্যাড্রেস", AppLanguage.EN to "IP Address"),
         "hopNumber" to mapOf(AppLanguage.BN to "হপ নম্বর", AppLanguage.EN to "Hop Number"),
         "latency" to mapOf(AppLanguage.BN to "লেটেন্সি", AppLanguage.EN to "Latency"),
@@ -117,8 +123,8 @@ object Translations {
         "statusUnknown" to mapOf(AppLanguage.BN to "অজানা", AppLanguage.EN to "Unknown"),
         "workflowDiagram" to mapOf(AppLanguage.BN to "নেটওয়ার্ক ওয়ার্কফ্লো ডায়াগ্রাম", AppLanguage.EN to "Network Workflow Diagram"),
         "workflowSubtitle" to mapOf(
-            AppLanguage.BN to "ডিভাইস ➔ লোকাল গেটওয়ে ➔ আপস্ট্রিম গেটওয়ে ➔ ইন্টারনেট",
-            AppLanguage.EN to "Device ➔ Local Gateway ➔ Upstream Gateway ➔ Internet"
+            AppLanguage.BN to "ডিভাইস ➔ হোম ওয়াইফাই রাউটার ➔ আপস্ট্রিম গেটওয়ে ১ ➔ আপস্ট্রিম গেটওয়ে ২ ➔ ইন্টারনেট",
+            AppLanguage.EN to "Device ➔ Home Wifi Router ➔ Upstream Gateway 1 ➔ Upstream Gateway 2 ➔ Internet"
         ),
         "discoveredPppoeGateway" to mapOf(
             AppLanguage.BN to "শনাক্তকৃত পিপিপিওই গেটওয়ে",
@@ -149,8 +155,8 @@ object Translations {
             AppLanguage.EN to "Troubleshooting Note"
         ),
         "troubleshootingRouterIssue" to mapOf(
-            AppLanguage.BN to "আপনার ডিভাইস থেকে হোম রাউটারে সমস্যা।",
-            AppLanguage.EN to "Problem connecting from your device to the home router."
+            AppLanguage.BN to "আপনার ডিভাইস থেকে হোম রাউটারে সমস্যা। এটি ঠিক করে তারপর আবার ডায়াগনস্টিক দিন।",
+            AppLanguage.EN to "Problem connecting from your device to the home router. Fix this and then run diagnostic again."
         ),
         "troubleshootingUpstreamIssue" to mapOf(
             AppLanguage.BN to "আপনার রাউটার থেকে পরবর্তি ডিভাইসে সমস্যা।",
