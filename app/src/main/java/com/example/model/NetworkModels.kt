@@ -147,9 +147,29 @@ data class DiagnosticEvidenceItem(
 )
 
 enum class DiagnosticMode(val packetCount: Int, val titleKey: String) {
-    QUICK(packetCount = 3, titleKey = "quickDiagnostic"),
-    FULL(packetCount = 10, titleKey = "fullDiagnostic")
+    QUICK(packetCount = 5, titleKey = "quickDiagnostic"),
+    FULL(packetCount = 20, titleKey = "fullDiagnostic")
 }
+
+data class DiagnosticWorkflowNode(
+    val stepNumber: Int,
+    val title: String,
+    val ip: String,
+    val latencyText: String,
+    val latencyMs: Double? = null,
+    val minMs: Double = 0.0,
+    val maxMs: Double = 0.0,
+    val packetLossPercent: Double = 0.0,
+    val packetLossText: String = "0.0%",
+    val transmitted: Int = 5,
+    val received: Int = 5,
+    val isReachable: Boolean = true,
+    val isSkipped: Boolean = false,
+    val isIcmpBlocked: Boolean = false,
+    val statusText: String = "স্বাভাবিক",
+    val statusLevel: String = "green", // "green", "red", "amber", "gray"
+    val iconType: String = "router"
+)
 
 data class DiagnosticResult(
     val gateway1: String = "192.168.0.1",
@@ -163,6 +183,7 @@ data class DiagnosticResult(
     val secondaryTargetStats: ProbeStats = ProbeStats(host = "1.1.1.1", label = "Internet (Secondary)"),
     val hops: List<DiagnosticHop> = emptyList(),
     val upstreamDiscovery: UpstreamDiscoveryResult = UpstreamDiscoveryResult(),
+    val nodes: List<DiagnosticWorkflowNode> = emptyList(),
     val diagnosisType: DiagnosisType = DiagnosisType.HEALTHY,
     val diagnosisTitle: String = "Normal Connection",
     val diagnosisSummary: String = "All measured network segments are responsive with low latency and 0% packet loss.",

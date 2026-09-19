@@ -3,11 +3,17 @@ package com.example.data
 import android.content.Context
 import com.example.model.*
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelChildren
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 class DiagnosticRepository(
     private val configRepository: ConfigRepository,
@@ -76,59 +82,418 @@ class DiagnosticRepository(
         }
     }
 
+    private fun toBengaliDigits(num: Int): String {
+        val bnDigits = charArrayOf('০', '১', '২', '৩', '৪', '৫', '৬', '৭', '৮', '৯')
+        return num.toString().map { if (it in '0'..'9') bnDigits[it - '0'] else it }.joinToString("")
+    }
+
+    private fun getUpstreamNodeTitle(index: Int): String {
+        return "আপস্ট্রিম গেটওয়ে ${toBengaliDigits(index)}"
+    }
+
+    private data class ConcurrentProbesResult(
+        val routerStats: ProbeStats,
+        val node3Result: Pair<DiagnosticWorkflowNode, ProbeStats?>,
+        val node4Result: Pair<DiagnosticWorkflowNode, ProbeStats?>,
+        val node5Result: Pair<DiagnosticWorkflowNode, ProbeStats?>,
+        val dynamicResults: List<Pair<DiagnosticWorkflowNode, ProbeStats?>>,
+        val internetStats: ProbeStats
+    )
+
+    private suspend fun probeMiddleNode(
+        stepNumber: Int,
+        title: String,
+        ip: String,
+        iconType: String,
+        packetCount: Int
+    ): Pair<DiagnosticWorkflowNode, ProbeStats?> {
+        val isIpValid = ip.isNotBlank() && ip != "Unknown" && ip != "*"
+        val stats = if (isIpValid) {
+            NetworkUtils.measureHostHealth(ip, label = title, count = packetCount, timeoutMs = 800)
+        } else {
+            null
+        }
+
+        val isBlocked = stats == null || !stats.isReachable || stats.packetLossPercent >= 100.0 || (stats.transmitted > 0 && stats.received == 0)
+        val node = if (isBlocked) {
+            DiagnosticWorkflowNode(
+                stepNumber = stepNumber,
+                title = title,
+                ip = if (isIpValid) ip else "Unknown",
+                latencyText = "Timeout",
+                latencyMs = null,
+                packetLossPercent = 100.0,
+                packetLossText = "100.0%",
+                transmitted = packetCount,
+                received = 0,
+                isReachable = false,
+                isSkipped = false,
+                isIcmpBlocked = true,
+                statusText = "ICMP বন্ধ আছে",
+                statusLevel = "amber",
+                iconType = iconType
+            )
+        } else if (stats.packetLossPercent > 3.0) {
+            DiagnosticWorkflowNode(
+                stepNumber = stepNumber,
+                title = title,
+                ip = ip,
+                latencyText = "${"%.1f".format(stats.avgMs)} ms",
+                latencyMs = stats.avgMs,
+                minMs = stats.minMs,
+                maxMs = stats.maxMs,
+                packetLossPercent = stats.packetLossPercent,
+                packetLossText = "${"%.1f".format(stats.packetLossPercent)}%",
+                transmitted = stats.transmitted,
+                received = stats.received,
+                isReachable = true,
+                isSkipped = false,
+                isIcmpBlocked = false,
+                statusText = "সমস্যা",
+                statusLevel = "red",
+                iconType = iconType
+            )
+        } else {
+            DiagnosticWorkflowNode(
+                stepNumber = stepNumber,
+                title = title,
+                ip = ip,
+                latencyText = "${"%.1f".format(stats.avgMs)} ms",
+                latencyMs = stats.avgMs,
+                minMs = stats.minMs,
+                maxMs = stats.maxMs,
+                packetLossPercent = stats.packetLossPercent,
+                packetLossText = "${"%.1f".format(stats.packetLossPercent)}%",
+                transmitted = stats.transmitted,
+                received = stats.received,
+                isReachable = true,
+                isSkipped = false,
+                isIcmpBlocked = false,
+                statusText = "স্বাভাবিক",
+                statusLevel = "green",
+                iconType = iconType
+            )
+        }
+        return Pair(node, stats)
+    }
+
     private suspend fun runOnDeviceDiagnostic(
         context: Context,
         mode: DiagnosticMode = DiagnosticMode.QUICK,
         onProgress: (Int) -> Unit = {}
     ): DiagnosticResult {
-        val packetCount = mode.packetCount
+        // Dynamic Packet Count: exactly 5 packets for Quick Diagnostic, 20 packets for Full Diagnostic
+        val packetCount = if (mode == DiagnosticMode.FULL) 20 else 5
         onProgress(5)
 
-        // Stage 1: Detect local default gateway (Home Wifi Router) and client IP
+        // Stage 1: Detect client device IP & local default gateway
+        val clientIp = NetworkUtils.getConnectedWifiInfo(context).ipAddress
         val localGwIp = NetworkUtils.getDefaultGateway(context).trim()
         val isLocalGwValid = localGwIp.isNotBlank() && localGwIp != "0.0.0.0"
-        val clientIp = NetworkUtils.getConnectedWifiInfo(context).ipAddress
-        onProgress(15)
 
-        // Stage 2: Test Home Wifi Router Health with mode packet count
-        val localGwStats = if (isLocalGwValid) {
-            NetworkUtils.measureHostHealth(localGwIp, label = "Home Wifi Router", count = packetCount, timeoutMs = 800)
-        } else {
-            ProbeStats(
-                host = "Disconnected",
-                label = "Home Wifi Router",
-                transmitted = packetCount,
-                received = 0,
-                packetLossPercent = 100.0,
-                isReachable = false
-            )
+        // Node 1: আপনার ডিভাইস (Device) - always healthy
+        val nodeDevice = DiagnosticWorkflowNode(
+            stepNumber = 1,
+            title = "আপনার ডিভাইস",
+            ip = clientIp.ifBlank { "127.0.0.1" },
+            latencyText = "0.0 ms",
+            latencyMs = 0.0,
+            minMs = 0.0,
+            maxMs = 0.0,
+            packetLossPercent = 0.0,
+            packetLossText = "0.0%",
+            transmitted = packetCount,
+            received = packetCount,
+            isReachable = true,
+            isSkipped = false,
+            isIcmpBlocked = false,
+            statusText = "স্বাভাবিক",
+            statusLevel = "green",
+            iconType = "device"
+        )
+        onProgress(10)
+
+        // Phase 1 (Discovery): Rapid sequential traceroute (1 packet per TTL) to discover candidate IPs up to 8.8.8.8
+        val maxHops = if (mode == DiagnosticMode.FULL) 12 else 6
+        val traceHops = NetworkUtils.executeTraceroute(
+            target = "8.8.8.8",
+            maxHops = maxHops,
+            probeCount = 1,
+            fastDiscovery = true
+        )
+        val upstreamDiscoveryRaw = upstreamGatewayProvider.discoverUpstreamGateway(
+            context = context,
+            localGateway = localGwIp,
+            clientIp = clientIp,
+            primaryHops = traceHops
+        )
+        onProgress(25)
+
+        // Extract intermediate hop candidates (excluding local router, client, localhost, 0.0.0.0, and 8.8.8.8)
+        val intermediateHops = traceHops.filter { hop ->
+            val ip = hop.ip.trim()
+            ip != localGwIp && ip != clientIp && ip != "127.0.0.1" && ip != "0.0.0.0" && ip != "8.8.8.8"
         }
-        onProgress(30)
 
-        // Smart Skip Logic: If ping to "Home Wifi Router" fails (100% loss/unreachable), halt scan immediately and skip nodes 3, 4, and 5
-        val isHomeRouterFailed = !isLocalGwValid || !localGwStats.isReachable || localGwStats.packetLossPercent >= 100.0 || (localGwStats.transmitted > 0 && localGwStats.received == 0)
+        // Candidate for Node 3: পরবর্তি ডিভাইস (Next Device)
+        val node3Ip = intermediateHops.getOrNull(0)?.ip?.takeIf { it != "*" && it.isNotBlank() }
+            ?: upstreamDiscoveryRaw.pppoeGateway?.takeIf { it.isNotBlank() && it != localGwIp }
+            ?: upstreamDiscoveryRaw.detectedIp.takeIf { it.isNotBlank() && it != localGwIp && it != "*" }
+            ?: "Unknown"
+
+        // Candidate for Node 4: আপস্ট্রিম গেটওয়ে ১ (Upstream Gateway 1)
+        val node4Ip = intermediateHops.getOrNull(1)?.ip?.takeIf { it != "*" && it.isNotBlank() && it != node3Ip }
+            ?: upstreamDiscoveryRaw.detectedIp.takeIf { it.isNotBlank() && it != localGwIp && it != node3Ip && it != "*" }
+            ?: "Unknown"
+
+        // Candidate for Node 5: আপস্ট্রিম গেটওয়ে ২ (Upstream Gateway 2)
+        val node5Ip = intermediateHops.getOrNull(2)?.ip?.takeIf { it != "*" && it.isNotBlank() && it != node3Ip && it != node4Ip }
+            ?: "Unknown"
+
+        // Dynamic extra hops candidates for FULL Diagnostic mode
+        val dynamicHopCandidates = mutableListOf<Triple<Int, String, String>>() // (stepNumber, title, ip)
+        if (mode == DiagnosticMode.FULL && intermediateHops.size > 3) {
+            var dynIndex = 3
+            val usedIps = mutableSetOf(localGwIp, clientIp, node3Ip, node4Ip, node5Ip, "8.8.8.8")
+            for (i in 3 until intermediateHops.size) {
+                val hopIp = intermediateHops[i].ip.trim()
+                if (hopIp !in usedIps) {
+                    usedIps.add(hopIp)
+                    val stepNum = 6 + (dynIndex - 3)
+                    val title = getUpstreamNodeTitle(dynIndex)
+                    dynamicHopCandidates.add(Triple(stepNum, title, hopIp))
+                    dynIndex++
+                }
+            }
+        }
+
+        // Phase 2 (Concurrent Heavy Ping): Launch heavy pings simultaneously across all nodes using Coroutines async & awaitAll()
+        val completedProbes = AtomicInteger(0)
+        val totalProbes = 5 + dynamicHopCandidates.size
+
+        var isRouterHalted = false
+
+        val concurrentResult = coroutineScope {
+            val deferredRouter = async(Dispatchers.IO) {
+                val stats = if (isLocalGwValid) {
+                    NetworkUtils.measureHostHealth(localGwIp, label = "Home Wifi Router", count = packetCount, timeoutMs = 800)
+                } else {
+                    ProbeStats(
+                        host = "Disconnected",
+                        label = "Home Wifi Router",
+                        transmitted = packetCount,
+                        received = 0,
+                        packetLossPercent = 100.0,
+                        isReachable = false
+                    )
+                }
+                val done = completedProbes.incrementAndGet()
+                onProgress(25 + (done * 65 / totalProbes))
+                stats
+            }
+
+            val deferredNode3 = async(Dispatchers.IO) {
+                val res = probeMiddleNode(3, "পরবর্তি ডিভাইস", node3Ip, "device_next", packetCount)
+                val done = completedProbes.incrementAndGet()
+                onProgress(25 + (done * 65 / totalProbes))
+                res
+            }
+
+            val deferredNode4 = async(Dispatchers.IO) {
+                val res = probeMiddleNode(4, "আপস্ট্রিম গেটওয়ে ১", node4Ip, "gateway", packetCount)
+                val done = completedProbes.incrementAndGet()
+                onProgress(25 + (done * 65 / totalProbes))
+                res
+            }
+
+            val deferredNode5 = async(Dispatchers.IO) {
+                val res = probeMiddleNode(5, "আপস্ট্রিম গেটওয়ে ২", node5Ip, "gateway", packetCount)
+                val done = completedProbes.incrementAndGet()
+                onProgress(25 + (done * 65 / totalProbes))
+                res
+            }
+
+            val deferredDynamics = dynamicHopCandidates.map { (stepNum, title, ip) ->
+                async(Dispatchers.IO) {
+                    val res = probeMiddleNode(stepNum, title, ip, "gateway", packetCount)
+                    val done = completedProbes.incrementAndGet()
+                    onProgress(25 + (done * 65 / totalProbes))
+                    res
+                }
+            }
+
+            val deferredInternet = async(Dispatchers.IO) {
+                val stats = NetworkUtils.measureHostHealth("8.8.8.8", label = "Internet (8.8.8.8)", count = packetCount, timeoutMs = 1000)
+                val done = completedProbes.incrementAndGet()
+                onProgress(25 + (done * 65 / totalProbes))
+                stats
+            }
+
+            // Await router probe first to immediately detect critical router failure
+            val routerRes = deferredRouter.await()
+
+            val isFailed = !isLocalGwValid || !routerRes.isReachable || routerRes.packetLossPercent >= 100.0 || (routerRes.transmitted > 0 && routerRes.received == 0)
+            if (isFailed) {
+                // Instantly force progress to 100% and cancel all other running probe coroutines
+                onProgress(100)
+                isRouterHalted = true
+                deferredNode3.cancel()
+                deferredNode4.cancel()
+                deferredNode5.cancel()
+                deferredDynamics.forEach { it.cancel() }
+                deferredInternet.cancel()
+
+                val dummyMiddle = DiagnosticWorkflowNode(
+                    stepNumber = 3,
+                    title = "পরবর্তি ডিভাইস",
+                    ip = "N/A",
+                    latencyText = "N/A",
+                    packetLossPercent = 0.0,
+                    packetLossText = "N/A",
+                    transmitted = packetCount,
+                    received = 0,
+                    statusText = "N/A",
+                    statusLevel = "gray",
+                    isSkipped = true,
+                    iconType = "device_next"
+                ) to ProbeStats(host = "N/A", label = "পরবর্তি ডিভাইস", transmitted = packetCount, received = 0, packetLossPercent = 0.0, isReachable = false)
+
+                ConcurrentProbesResult(
+                    routerStats = routerRes,
+                    node3Result = dummyMiddle,
+                    node4Result = dummyMiddle,
+                    node5Result = dummyMiddle,
+                    dynamicResults = emptyList(),
+                    internetStats = ProbeStats(host = "8.8.8.8", label = "Internet", transmitted = packetCount, received = 0, packetLossPercent = 100.0, isReachable = false)
+                )
+            } else {
+                val n3Res = deferredNode3.await()
+                val n4Res = deferredNode4.await()
+                val n5Res = deferredNode5.await()
+                val dynRes = deferredDynamics.awaitAll()
+                val netRes = deferredInternet.await()
+
+                ConcurrentProbesResult(
+                    routerStats = routerRes,
+                    node3Result = n3Res,
+                    node4Result = n4Res,
+                    node5Result = n5Res,
+                    dynamicResults = dynRes,
+                    internetStats = netRes
+                )
+            }
+        }
+
+        val finalLocalGwStats = concurrentResult.routerStats
+        val localGwStats = finalLocalGwStats
+        val (node3, node3Stats) = concurrentResult.node3Result
+        val (node4, node4Stats) = concurrentResult.node4Result
+        val (node5, node5Stats) = concurrentResult.node5Result
+        val dynamicNodes = concurrentResult.dynamicResults.map { it.first }
+        val internetStats = concurrentResult.internetStats
+
+        // Rule 5: Home Router Failure [CRITICAL HALT]
+        val isHomeRouterFailed = isRouterHalted || !isLocalGwValid || !finalLocalGwStats.isReachable || finalLocalGwStats.packetLossPercent >= 100.0 || (finalLocalGwStats.transmitted > 0 && finalLocalGwStats.received == 0)
         if (isHomeRouterFailed) {
             onProgress(100)
-            val evidenceList = mutableListOf(
-                DiagnosticEvidenceItem(
-                    title = "Home Wifi Router Link",
-                    detail = "Unreachable (100% packet loss to router ${localGwStats.host})",
-                    passed = false
-                )
+            val nodeRouterFailed = DiagnosticWorkflowNode(
+                stepNumber = 2,
+                title = "হোম ওয়াইফাই রাউটার",
+                ip = if (isLocalGwValid) localGwIp else "Not Connected",
+                latencyText = "Timeout",
+                latencyMs = null,
+                packetLossPercent = 100.0,
+                packetLossText = "100.0%",
+                transmitted = packetCount,
+                received = 0,
+                isReachable = false,
+                isSkipped = false,
+                isIcmpBlocked = false,
+                statusText = "সমস্যা",
+                statusLevel = "red",
+                iconType = "router"
             )
+            val node3Skipped = DiagnosticWorkflowNode(
+                stepNumber = 3,
+                title = "পরবর্তি ডিভাইস",
+                ip = "N/A",
+                latencyText = "N/A",
+                packetLossPercent = 0.0,
+                packetLossText = "N/A",
+                transmitted = packetCount,
+                received = 0,
+                statusText = "N/A",
+                statusLevel = "gray",
+                isSkipped = true,
+                iconType = "device_next"
+            )
+            val node4Skipped = DiagnosticWorkflowNode(
+                stepNumber = 4,
+                title = "আপস্ট্রিম গেটওয়ে ১",
+                ip = "N/A",
+                latencyText = "N/A",
+                packetLossPercent = 0.0,
+                packetLossText = "N/A",
+                transmitted = packetCount,
+                received = 0,
+                statusText = "N/A",
+                statusLevel = "gray",
+                isSkipped = true,
+                iconType = "gateway"
+            )
+            val node5Skipped = DiagnosticWorkflowNode(
+                stepNumber = 5,
+                title = "আপস্ট্রিম গেটওয়ে ২",
+                ip = "N/A",
+                latencyText = "N/A",
+                packetLossPercent = 0.0,
+                packetLossText = "N/A",
+                transmitted = packetCount,
+                received = 0,
+                statusText = "N/A",
+                statusLevel = "gray",
+                isSkipped = true,
+                iconType = "gateway"
+            )
+            val nodeInternetSkipped = DiagnosticWorkflowNode(
+                stepNumber = 6,
+                title = "ইন্টারনেট",
+                ip = "8.8.8.8",
+                latencyText = "N/A",
+                packetLossPercent = 0.0,
+                packetLossText = "N/A",
+                transmitted = packetCount,
+                received = 0,
+                statusText = "N/A",
+                statusLevel = "gray",
+                isSkipped = true,
+                iconType = "internet"
+            )
+
+            val haltedNodes = listOf(nodeDevice, nodeRouterFailed, node3Skipped, node4Skipped, node5Skipped, nodeInternetSkipped)
+
             return DiagnosticResult(
                 gateway1 = if (isLocalGwValid) localGwIp else "Not Connected",
                 gateway2 = "Unknown",
                 gateway1Latency = -1.0,
                 gateway2Latency = 0.0,
-                localGwStats = localGwStats,
+                localGwStats = finalLocalGwStats,
                 upstreamGwStats = null,
                 upstreamGw2Stats = null,
+                internetTargetStats = ProbeStats(host = "8.8.8.8", label = "Internet", transmitted = packetCount, received = 0, packetLossPercent = 100.0, isReachable = false),
+                secondaryTargetStats = ProbeStats(host = "1.1.1.1", label = "Internet Secondary", transmitted = packetCount, received = 0, packetLossPercent = 100.0, isReachable = false),
                 hops = emptyList(),
+                nodes = haltedNodes,
                 diagnosisType = DiagnosisType.LOCAL_LAN_ISSUE,
-                diagnosisTitle = "Home Wifi Router Issue",
-                diagnosisSummary = "আপনার ডিভাইস থেকে হোম রাউটারে সমস্যা। এটি ঠিক করে তারপর আবার ডায়াগনস্টিক দিন।",
-                evidenceList = evidenceList,
+                diagnosisTitle = "হোম ওয়াইফাই রাউটার সমস্যা",
+                diagnosisSummary = "আপনার হোম ওয়াইফাই রাউটারে সমস্যা এটা ঠিক করে পুনরায় ডায়াগোন্সটিক চালান।",
+                evidenceList = listOf(
+                    DiagnosticEvidenceItem(
+                        title = "Home Wifi Router Link",
+                        detail = "Unreachable (100% packet loss to router ${finalLocalGwStats.host})",
+                        passed = false
+                    )
+                ),
                 error = "Home Wifi Router Unreachable",
                 isFromBackend = false,
                 isSkippedDueToRouterFailure = true,
@@ -136,107 +501,160 @@ class DiagnosticRepository(
             )
         }
 
-        // Stage 3: Collect Traceroute Path Information (Primary Target)
-        val targetPrimary = configRepository.pingTarget.ifBlank { "8.8.8.8" }
-        val traceHops = NetworkUtils.executeTraceroute(target = targetPrimary, maxHops = 10)
-        onProgress(50)
-
-        // Stage 4: Multi-Method Client-Side Upstream Gateway Discovery & Correlation (Upstream Gateway 1)
-        val upstreamDiscoveryRaw = upstreamGatewayProvider.discoverUpstreamGateway(
-            context = context,
-            localGateway = localGwIp,
-            clientIp = clientIp,
-            primaryHops = traceHops
+        // Node 2 passed
+        val nodeRouterSuccess = DiagnosticWorkflowNode(
+            stepNumber = 2,
+            title = "হোম ওয়াইফাই রাউটার",
+            ip = localGwIp,
+            latencyText = "${"%.1f".format(localGwStats.avgMs)} ms",
+            latencyMs = localGwStats.avgMs,
+            minMs = localGwStats.minMs,
+            maxMs = localGwStats.maxMs,
+            packetLossPercent = localGwStats.packetLossPercent,
+            packetLossText = "${"%.1f".format(localGwStats.packetLossPercent)}%",
+            transmitted = localGwStats.transmitted,
+            received = localGwStats.received,
+            isReachable = true,
+            isSkipped = false,
+            isIcmpBlocked = false,
+            statusText = "স্বাভাবিক",
+            statusLevel = "green",
+            iconType = "router"
         )
 
-        val hop2Ip = traceHops.getOrNull(1)?.ip?.takeIf { it != "*" && it.isNotBlank() && !it.equals("Unknown", ignoreCase = true) }
-        val detectedUpstream = upstreamDiscoveryRaw.detectedIp.takeIf { it.isNotBlank() && it != "*" && !it.equals("Unknown", ignoreCase = true) }
-            ?: hop2Ip
-            ?: traceHops.firstOrNull { it.hop > 1 && it.ip != "*" && it.ip.isNotBlank() && !it.ip.equals("Unknown", ignoreCase = true) }?.ip
+        // Final Node: ইন্টারনেট (Internet) - strictly 8.8.8.8
+        val finalStepNumber = if (mode == DiagnosticMode.FULL) 6 + dynamicNodes.size else 6
+        val isInternetSuccess = internetStats.isReachable && internetStats.packetLossPercent < 100.0 && internetStats.received > 0
 
-        val upstreamDiscovery = if (!detectedUpstream.isNullOrBlank()) {
-            upstreamDiscoveryRaw.copy(
-                detectedIp = detectedUpstream,
-                isConfirmed = true
+        val nodeInternet: DiagnosticWorkflowNode
+        val diagnosisTitle: String
+        val diagnosisSummary: String
+        val diagnosisType: DiagnosisType
+
+        val middleHopsList = mutableListOf(node3, node4, node5)
+        middleHopsList.addAll(dynamicNodes)
+        val firstFailingMiddleHop = middleHopsList.firstOrNull { it.packetLossPercent > 3.0 && it.packetLossPercent < 100.0 }
+
+        if (isInternetSuccess) {
+            // Rule 6: If the Final Node (Internet) succeeds despite middle failures, show Green/Success:
+            // "আপনার ইন্টারনেট সংযোগ সম্পূর্ণ স্বাভাবিক আছে।"
+            nodeInternet = DiagnosticWorkflowNode(
+                stepNumber = finalStepNumber,
+                title = "ইন্টারনেট",
+                ip = "8.8.8.8",
+                latencyText = "${"%.1f".format(internetStats.avgMs)} ms",
+                latencyMs = internetStats.avgMs,
+                minMs = internetStats.minMs,
+                maxMs = internetStats.maxMs,
+                packetLossPercent = internetStats.packetLossPercent,
+                packetLossText = "${"%.1f".format(internetStats.packetLossPercent)}%",
+                transmitted = internetStats.transmitted,
+                received = internetStats.received,
+                isReachable = true,
+                isSkipped = false,
+                isIcmpBlocked = false,
+                statusText = "স্বাভাবিক",
+                statusLevel = "green",
+                iconType = "internet"
             )
+            if (firstFailingMiddleHop != null) {
+                diagnosisTitle = if (firstFailingMiddleHop.stepNumber == 3 || firstFailingMiddleHop.title.contains("পরবর্তি")) {
+                    "পরবর্তী ডিভাইসে সমস্যা"
+                } else {
+                    "${firstFailingMiddleHop.title} এ সমস্যা"
+                }
+                diagnosisSummary = if (firstFailingMiddleHop.stepNumber == 3 || firstFailingMiddleHop.title.contains("পরবর্তি")) {
+                    "আপনার হোম ওয়াইফাই রাউটারের পরের ডিভাইসে সমস্যা।"
+                } else {
+                    "${firstFailingMiddleHop.title} এ সমস্যা।"
+                }
+                diagnosisType = DiagnosisType.ROUTER_TO_ISP_ISSUE
+            } else {
+                diagnosisTitle = "ইন্টারনেট সংযোগ স্বাভাবিক"
+                diagnosisSummary = "আপনার ইন্টারনেট সংযোগ সম্পূর্ণ স্বাভাবিক আছে।"
+                diagnosisType = DiagnosisType.HEALTHY
+            }
         } else {
-            upstreamDiscoveryRaw
-        }
-
-        val upstreamGwDisplay = if (upstreamDiscovery.detectedIp.isNotBlank() && upstreamDiscovery.detectedIp != "*") {
-            upstreamDiscovery.detectedIp
-        } else {
-            "Unknown"
-        }
-
-        val upstreamGwStats = if (upstreamGwDisplay != "Unknown") {
-            NetworkUtils.measureHostHealth(
-                upstreamGwDisplay,
-                label = "Upstream Gateway 1",
-                count = packetCount,
-                timeoutMs = 1500
+            // Rule 7: Final Internet Failure (Node 8.8.8.8) - show Red/Error:
+            // "আপনার ইন্টারনেট কানেকশনে সমস্যা , ISP প্রোভাইডরের সাথে যোগাযোগ করুন ।"
+            nodeInternet = DiagnosticWorkflowNode(
+                stepNumber = finalStepNumber,
+                title = "ইন্টারনেট",
+                ip = "8.8.8.8",
+                latencyText = "Timeout",
+                latencyMs = null,
+                packetLossPercent = 100.0,
+                packetLossText = "100.0%",
+                transmitted = packetCount,
+                received = 0,
+                isReachable = false,
+                isSkipped = false,
+                isIcmpBlocked = false,
+                statusText = "সমস্যা",
+                statusLevel = "red",
+                iconType = "internet"
             )
-        } else {
-            null
+            if (firstFailingMiddleHop != null) {
+                diagnosisTitle = if (firstFailingMiddleHop.stepNumber == 3 || firstFailingMiddleHop.title.contains("পরবর্তি")) {
+                    "পরবর্তী ডিভাইসে সমস্যা"
+                } else {
+                    "${firstFailingMiddleHop.title} এ সমস্যা"
+                }
+                diagnosisSummary = if (firstFailingMiddleHop.stepNumber == 3 || firstFailingMiddleHop.title.contains("পরবর্তি")) {
+                    "আপনার হোম ওয়াইফাই রাউটারের পরের ডিভাইসে সমস্যা।"
+                } else {
+                    "${firstFailingMiddleHop.title} এ সমস্যা।"
+                }
+                diagnosisType = DiagnosisType.ROUTER_TO_ISP_ISSUE
+            } else {
+                diagnosisTitle = "ইন্টারনেট কানেকশনে সমস্যা"
+                diagnosisSummary = "আপনার ইন্টারনেট কানেকশনে সমস্যা , ISP প্রোভাইডরের সাথে যোগাযোগ করুন ।"
+                diagnosisType = DiagnosisType.DESTINATION_ISSUE
+            }
         }
-        onProgress(70)
-
-        // Stage 5: Discover & Probe Upstream Gateway 2 (Hop 3 or subsequent gateway hop)
-        val hop3Ip = traceHops.getOrNull(2)?.ip?.takeIf {
-            it != "*" && it.isNotBlank() && !it.equals("Unknown", ignoreCase = true) && it != upstreamGwDisplay && it != localGwIp
-        } ?: traceHops.firstOrNull {
-            it.hop > 2 && it.ip != "*" && it.ip.isNotBlank() && !it.ip.equals("Unknown", ignoreCase = true) && it.ip != upstreamGwDisplay && it.ip != localGwIp
-        }?.ip
-
-        val upstreamGw2Stats = if (!hop3Ip.isNullOrBlank()) {
-            NetworkUtils.measureHostHealth(
-                hop3Ip,
-                label = "Upstream Gateway 2",
-                count = packetCount,
-                timeoutMs = 1500
-            )
-        } else {
-            null
-        }
-        onProgress(85)
-
-        // Stage 6: Test Internet targets (Primary & Secondary) with repeated probes
-        val primaryStats = NetworkUtils.measureHostHealth(targetPrimary, label = "Internet Primary ($targetPrimary)", count = packetCount, timeoutMs = 1000)
-        val targetSecondary = "1.1.1.1"
-        val secondaryStats = NetworkUtils.measureHostHealth(targetSecondary, label = "Internet Secondary ($targetSecondary)", count = packetCount, timeoutMs = 1000)
         onProgress(95)
 
-        // Stage 7: Differential Diagnostic Decision Engine
+        val allWorkflowNodes = mutableListOf(nodeDevice, nodeRouterSuccess, node3, node4, node5)
+        allWorkflowNodes.addAll(dynamicNodes)
+        allWorkflowNodes.add(nodeInternet)
+
         val evidenceList = mutableListOf<DiagnosticEvidenceItem>()
-        val diagnosis = evaluateDiagnosis(
-            isLocalGwValid = isLocalGwValid,
-            localGwStats = localGwStats,
-            upstreamDiscovery = upstreamDiscovery,
-            upstreamGwStats = upstreamGwStats,
-            primaryTargetStats = primaryStats,
-            secondaryTargetStats = secondaryStats,
-            traceHops = traceHops,
-            evidenceList = evidenceList
+        evidenceList.add(
+            DiagnosticEvidenceItem(
+                title = "হোম ওয়াইফাই রাউটার",
+                detail = "${nodeRouterSuccess.latencyText}, ${nodeRouterSuccess.packetLossText} loss",
+                passed = true
+            )
         )
+        evidenceList.add(
+            DiagnosticEvidenceItem(
+                title = "ইন্টারনেট (8.8.8.8)",
+                detail = if (isInternetSuccess) "${nodeInternet.latencyText}, ${nodeInternet.packetLossText} loss" else "Timeout / 100% loss",
+                passed = isInternetSuccess
+            )
+        )
+
+        val secondaryStats = NetworkUtils.measureHostHealth("1.1.1.1", label = "Internet Secondary (1.1.1.1)", count = packetCount, timeoutMs = 800)
         onProgress(100)
 
         return DiagnosticResult(
-            gateway1 = if (isLocalGwValid) localGwIp else "Not Connected",
-            gateway2 = upstreamGwDisplay,
-            gateway1Latency = if (localGwStats.isReachable) localGwStats.avgMs else -1.0,
-            gateway2Latency = upstreamGwStats?.avgMs ?: 0.0,
+            gateway1 = localGwIp,
+            gateway2 = node4Ip,
+            gateway1Latency = localGwStats.avgMs,
+            gateway2Latency = node4Stats?.avgMs ?: 0.0,
             localGwStats = localGwStats,
-            upstreamGwStats = upstreamGwStats,
-            upstreamGw2Stats = upstreamGw2Stats,
-            internetTargetStats = primaryStats,
+            upstreamGwStats = node4Stats,
+            upstreamGw2Stats = node5Stats,
+            internetTargetStats = internetStats,
             secondaryTargetStats = secondaryStats,
             hops = traceHops,
-            upstreamDiscovery = upstreamDiscovery,
-            diagnosisType = diagnosis.type,
-            diagnosisTitle = diagnosis.title,
-            diagnosisSummary = diagnosis.summary,
+            nodes = allWorkflowNodes,
+            upstreamDiscovery = upstreamDiscoveryRaw,
+            diagnosisType = diagnosisType,
+            diagnosisTitle = diagnosisTitle,
+            diagnosisSummary = diagnosisSummary,
             evidenceList = evidenceList,
-            error = if (!isLocalGwValid) "Local network interface is down" else null,
+            error = if (!isInternetSuccess) "Internet connection failure" else null,
             isFromBackend = false,
             isSkippedDueToRouterFailure = false,
             mode = mode

@@ -1,6 +1,10 @@
 package com.example.ui.screens
 
 import android.content.res.Configuration
+import android.net.Uri
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.*
@@ -18,6 +22,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.Hub
@@ -62,6 +67,7 @@ import com.example.model.DiagnosisType
 import com.example.model.DiagnosticEvidenceItem
 import com.example.model.DiagnosticHop
 import com.example.model.DiagnosticResult
+import com.example.model.DiagnosticWorkflowNode
 import com.example.model.UpstreamConfidence
 import com.example.model.UpstreamDetectionMethod
 import com.example.model.UpstreamDiscoveryResult
@@ -71,8 +77,13 @@ import com.example.ui.components.StatusTag
 import com.example.ui.theme.AppColors
 import com.example.ui.theme.AppRadius
 import com.example.ui.theme.AppSpacing
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 import kotlin.math.max
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 fun DiagnosticScreen(
@@ -102,21 +113,49 @@ fun DiagnosticScreen(
             }
 
             // 2. Intelligent Troubleshooting Note (Warning / Info Banner)
-            item {
-                TroubleshootingNoteCard(
-                    result = result,
-                    language = language
-                )
+            // Strictly displayed only AFTER the scan completes or immediately halts on router failure
+            val isScanCompleted = !isLoading || result.isSkippedDueToRouterFailure || progressPercent >= 100
+            if (!isLoading && isScanCompleted) {
+                item {
+                    TroubleshootingNoteCard(
+                        result = result,
+                        language = language
+                    )
+                }
             }
 
-            // 3. Network Workflow Diagram: The 5-Node Workflow
-            // (1. Your Device -> 2. Home Wifi Router -> 3. Upstream Gateway 1 -> 4. Upstream Gateway 2 -> 5. Internet)
+            // Download Report Button (Strictly shown when FULL diagnostic scan finishes or halts on router failure)
+            val isScanFinished = !isLoading && result.mode == DiagnosticMode.FULL && (
+                result.isSkippedDueToRouterFailure ||
+                result.nodes.any { it.iconType == "internet" || it.title == "ইন্টারনেট" } ||
+                progressPercent >= 100
+            )
+            if (isScanFinished) {
+                item {
+                    DownloadReportCard(
+                        result = result,
+                        language = language
+                    )
+                }
+            }
+
+            // 3. Network Workflow Diagram: The Dynamic Workflow
             item {
                 SimplifiedWorkflowDiagram(
                     result = result,
                     deviceIp = deviceIp,
                     language = language
                 )
+            }
+
+            // Bottom Download Report Button for convenience after reviewing nodes
+            if (isScanFinished) {
+                item {
+                    DownloadReportCard(
+                        result = result,
+                        language = language
+                    )
+                }
             }
         } else {
             // Empty / Initial State: Diagnostic Run Card with Quick and Full modes
@@ -154,15 +193,23 @@ fun TroubleshootingNoteCard(
             !result.gateway1.equals("Not Connected", ignoreCase = true) &&
             !result.gateway1.equals("Unknown", ignoreCase = true) &&
             !(result.localGwStats.transmitted > 0 && result.localGwStats.received == 0)
-    val isRouterProblematic = !isRouterReachable || routerLoss >= 3.0
+    val isRouterProblematic = !isRouterReachable || routerLoss >= 3.0 || result.isSkippedDueToRouterFailure
 
-    // 2. Step 2 (Upstream): Upstream gateway / next device health check
+    // 2. First Point of Failure Check for Middle Nodes (Node 3 to N with partial packet loss strictly >3.0% and <100.0%)
+    val middleNodes = if (result.nodes.isNotEmpty()) {
+        result.nodes.filter { it.stepNumber >= 3 && it.iconType != "internet" && it.title != "ইন্টারনেট" }
+    } else {
+        emptyList()
+    }
+    val firstFailingMiddleNode = middleNodes.firstOrNull { node ->
+        node.packetLossPercent > 3.0 && node.packetLossPercent < 100.0
+    }
+
+    // Upstream statistics for metric pill inspection
     val upstreamStats = result.upstreamGwStats
     val upstreamLoss = upstreamStats?.packetLossPercent ?: 0.0
-    val isUpstreamProblematic = if (upstreamStats != null) {
-        !upstreamStats.isReachable || upstreamLoss >= 3.0 || (upstreamStats.transmitted > 0 && upstreamStats.received == 0)
-    } else if (result.isFromBackend) {
-        result.gateway2Latency <= 0.0 || result.gateway2.isBlank() || result.gateway2.equals("Unknown", ignoreCase = true)
+    val isUpstreamProblematic = firstFailingMiddleNode != null || if (upstreamStats != null) {
+        !upstreamStats.isReachable || upstreamLoss > 3.0 || (upstreamStats.transmitted > 0 && upstreamStats.received == 0)
     } else {
         false
     }
@@ -184,6 +231,7 @@ fun TroubleshootingNoteCard(
     val isInternetProblematic = !isInternetReachable || internetLoss >= 3.0
 
     // Strict hierarchical selection inside UI rendering
+    val dynamicMessageText: String?
     val stringResId: Int
     val isSuccess: Boolean
     val bannerIcon: ImageVector
@@ -194,30 +242,46 @@ fun TroubleshootingNoteCard(
     if (isRouterProblematic) {
         // Step 1: Router Packet Loss >= 3% OR ping failed completely
         stringResId = R.string.troubleshooting_router_issue
+        dynamicMessageText = null
         isSuccess = false
         bannerIcon = Icons.Default.Router
         bannerStatusTag = if (language == AppLanguage.BN) "রাউটার সমস্যা" else "Router Issue"
         bannerStatusLevel = "red"
         stepLabel = if (language == AppLanguage.BN) "ধাপ ১: ডিভাইস ➔ হোম রাউটার" else "Step 1: Device ➔ Home Router"
-    } else if (isUpstreamProblematic) {
-        // Step 2: Router is Good (< 3%), BUT Upstream Packet Loss >= 3% OR ping failed completely
-        stringResId = R.string.troubleshooting_upstream_issue
+    } else if (firstFailingMiddleNode != null) {
+        // First Point of Failure: Middle node has partial packet loss (>3.0% and <100.0%)
+        stringResId = 0
+        dynamicMessageText = if (firstFailingMiddleNode.stepNumber == 3 || firstFailingMiddleNode.title.contains("পরবর্তি")) {
+            if (language == AppLanguage.BN) {
+                "আপনার হোম ওয়াইফাই রাউটারের পরের ডিভাইসে সমস্যা।"
+            } else {
+                "Problem with the device next to your home router."
+            }
+        } else {
+            if (language == AppLanguage.BN) {
+                "${firstFailingMiddleNode.title} এ সমস্যা।"
+            } else {
+                "Problem at ${firstFailingMiddleNode.title}."
+            }
+        }
         isSuccess = false
-        bannerIcon = Icons.Default.Hub
-        bannerStatusTag = if (language == AppLanguage.BN) "আপস্ট্রিম সমস্যা" else "Upstream Issue"
+        bannerIcon = Icons.Default.Warning
+        bannerStatusTag = if (language == AppLanguage.BN) "সমস্যা" else "Issue"
         bannerStatusLevel = "red"
-        stepLabel = if (language == AppLanguage.BN) "ধাপ ২: রাউটার ➔ পরবর্তী ডিভাইস" else "Step 2: Router ➔ Next Device"
+        stepLabel = if (language == AppLanguage.BN) "ধাপ ${firstFailingMiddleNode.stepNumber}: ${firstFailingMiddleNode.title}" else "Step ${firstFailingMiddleNode.stepNumber}: ${firstFailingMiddleNode.title}"
     } else if (isInternetProblematic) {
-        // Step 3: Router & Upstream are Good (< 3%), BUT Internet Packet Loss >= 3% OR ping failed completely
+        // Final Node: Internet Packet Loss >= 3% OR ping failed completely
         stringResId = R.string.troubleshooting_internet_issue
+        dynamicMessageText = null
         isSuccess = false
         bannerIcon = Icons.Default.Cloud
         bannerStatusTag = if (language == AppLanguage.BN) "আইএসপি সমস্যা" else "ISP Issue"
         bannerStatusLevel = "red"
         stepLabel = if (language == AppLanguage.BN) "ধাপ ৩: ইন্টারনেট / আইএসপি" else "Step 3: Internet / ISP"
     } else {
-        // Step 4: Success - ALL targets have < 3% packet loss
+        // Success: Home Router passed and Final Internet Node passed (middle ICMP blocks do NOT fail overall network)
         stringResId = R.string.troubleshooting_success
+        dynamicMessageText = null
         isSuccess = true
         bannerIcon = Icons.Default.CheckCircle
         bannerStatusTag = if (language == AppLanguage.BN) "স্বাভাবিক" else "Normal"
@@ -225,9 +289,9 @@ fun TroubleshootingNoteCard(
         stepLabel = if (language == AppLanguage.BN) "সংযোগ সম্পূর্ণ স্বাভাবিক" else "All Targets Normal"
     }
 
-    // Resolve localized strings dynamically from Android String Resources (strings.xml / values-bn/strings.xml)
+    // Resolve localized strings dynamically from Android String Resources or dynamic first point of failure text
     val context = LocalContext.current
-    val messageText = remember(stringResId, language) {
+    val messageText = dynamicMessageText ?: remember(stringResId, language) {
         try {
             val config = Configuration(context.resources.configuration)
             config.setLocale(Locale(language.code))
@@ -423,6 +487,158 @@ private fun TroubleshootingMetricPill(
     }
 }
 
+/**
+ * Formats diagnostic result into standard terminal ping format.
+ */
+fun generateDiagnosticReportText(result: DiagnosticResult): String {
+    val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
+    val now = dateFormat.format(Date())
+    val sb = StringBuilder()
+
+    sb.appendLine("=========================================")
+    sb.appendLine("YT Analyzer Network Diagnostic Report")
+    sb.appendLine("Timestamp: $now")
+    sb.appendLine("=========================================")
+    sb.appendLine()
+
+    val scannedNodes = if (result.nodes.isNotEmpty()) {
+        result.nodes.filter { !it.isSkipped }
+    } else {
+        emptyList()
+    }
+
+    scannedNodes.forEach { node ->
+        val nodeStatus = when {
+            node.isIcmpBlocked || node.statusText.contains("ICMP") -> "ICMP বন্ধ আছে"
+            node.statusLevel == "red" || node.statusText == "সমস্যা" || node.packetLossPercent > 3.0 -> "সমস্যা"
+            else -> "ভালো"
+        }
+
+        val totalTransmitted = if (node.transmitted > 0) node.transmitted else if (result.mode == DiagnosticMode.FULL) 20 else 5
+        val received = if (node.isIcmpBlocked || !node.isReachable) 0 else {
+            if (node.received in 0..totalTransmitted && node.transmitted > 0) {
+                node.received
+            } else {
+                Math.round(totalTransmitted.toDouble() * (100.0 - node.packetLossPercent) / 100.0).toInt().coerceIn(0, totalTransmitted)
+            }
+        }
+        val lossText = if (node.packetLossPercent % 1.0 == 0.0) {
+            "${node.packetLossPercent.toInt()}%"
+        } else {
+            "${"%.1f".format(Locale.US, node.packetLossPercent)}%"
+        }
+
+        val minRtt = if (node.isIcmpBlocked || !node.isReachable) "0.0" else "%.1f".format(Locale.US, if (node.minMs > 0.0) node.minMs else (node.latencyMs ?: 0.0))
+        val avgRtt = if (node.isIcmpBlocked || !node.isReachable) "0.0" else "%.1f".format(Locale.US, node.latencyMs ?: 0.0)
+        val maxRtt = if (node.isIcmpBlocked || !node.isReachable) "0.0" else "%.1f".format(Locale.US, if (node.maxMs > 0.0) node.maxMs else (node.latencyMs ?: 0.0))
+
+        sb.appendLine("Node Name: ${node.title}")
+        sb.appendLine("IP Address: ${node.ip}")
+        sb.appendLine("Status: $nodeStatus")
+        sb.appendLine("--- ping statistics ---")
+        sb.appendLine("$totalTransmitted packets transmitted, $received received, $lossText packet loss")
+        sb.appendLine("rtt min/avg/max = $minRtt/$avgRtt/$maxRtt ms")
+        sb.appendLine("-----------------------------------------")
+    }
+
+    return sb.toString()
+}
+
+/**
+ * Writes the report string into the target SAF Uri via ContentResolver OutputStream.
+ */
+suspend fun saveReportToUri(context: android.content.Context, uri: Uri, reportContent: String): Boolean {
+    return withContext(Dispatchers.IO) {
+        try {
+            context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+                outputStream.write(reportContent.toByteArray(Charsets.UTF_8))
+                outputStream.flush()
+            }
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+}
+
+@Composable
+fun DownloadReportCard(
+    result: DiagnosticResult,
+    language: AppLanguage,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+
+    val createDocumentLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("text/plain")
+    ) { uri: Uri? ->
+        if (uri != null) {
+            coroutineScope.launch {
+                val reportContent = generateDiagnosticReportText(result)
+                val success = saveReportToUri(context, uri, reportContent)
+                withContext(Dispatchers.Main) {
+                    if (success) {
+                        Toast.makeText(
+                            context,
+                            if (language == AppLanguage.BN) "রিপোর্ট সফলভাবে সংরক্ষণ করা হয়েছে" else "Report saved successfully",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    } else {
+                        Toast.makeText(
+                            context,
+                            if (language == AppLanguage.BN) "রিপোর্ট সংরক্ষণে ত্রুটি হয়েছে" else "Failed to save report",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                }
+            }
+        }
+    }
+
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .shadow(
+                elevation = 3.dp,
+                shape = RoundedCornerShape(AppRadius.lg),
+                spotColor = AppColors.primary
+            )
+            .clip(RoundedCornerShape(AppRadius.lg))
+            .background(
+                Brush.horizontalGradient(
+                    listOf(AppColors.gradientStart, AppColors.gradientEnd)
+                )
+            )
+            .clickable {
+                val timeStamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).format(Date())
+                val defaultFileName = "YT_Analyzer_Report_${timeStamp}.txt"
+                createDocumentLauncher.launch(defaultFileName)
+            }
+            .padding(horizontal = AppSpacing.lg, vertical = 14.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.Download,
+                contentDescription = if (language == AppLanguage.BN) "রিপোর্ট ডাউনলোড করুন" else "Download Report",
+                tint = Color.White,
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(modifier = Modifier.width(AppSpacing.sm))
+            Text(
+                text = if (language == AppLanguage.BN) "রিপোর্ট ডাউনলোড করুন" else "Download Report",
+                fontSize = 14.5.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White
+            )
+        }
+    }
+}
+
 @Composable
 private fun DiagnosticActionButton(
     text: String,
@@ -507,9 +723,9 @@ private fun InfographicHeaderCard(
                     )
                     Text(
                         text = if (language == AppLanguage.BN)
-                            "৫-নোড নেটওয়ার্ক পাথ বিশ্লেষণ ও ডায়াগনস্টিক"
+                            "ডায়নামিক নেটওয়ার্ক পাথ বিশ্লেষণ ও ডায়াগনস্টিক"
                         else
-                            "5-Node Network Path Analysis & Diagnostics",
+                            "Dynamic Network Path Analysis & Diagnostics",
                         fontSize = 12.sp,
                         color = AppColors.inkMuted
                     )
@@ -1368,182 +1584,121 @@ fun SimplifiedWorkflowDiagram(
 
         Spacer(modifier = Modifier.height(14.dp))
 
-        // 1. Device (Hop 0)
-        WorkflowHopCard(
-            stepNumber = 1,
-            title = Translations.tr("yourDevice", language),
-            icon = Icons.Default.Smartphone,
-            ip = deviceIp.ifBlank { "127.0.0.1" },
-            latencyText = "0.0 ms",
-            latencyMs = 0.0,
-            packetLossText = "0.0%",
-            statusText = Translations.tr("statusGood", language),
-            statusLevel = "green",
-            themeTint = Color(0xFF0284C7), // Light Blue theme
-            themeBg = Color(0xFFE0F2FE)
-        )
-
-        WorkflowArrowConnector()
-
-        // 2. Home Wifi Router (Hop 1)
-        val isLocalGwValid = result.gateway1.isNotBlank() &&
-                result.gateway1 != "0.0.0.0" &&
-                !result.gateway1.equals("Not Connected", ignoreCase = true) &&
-                !result.gateway1.equals("Unknown", ignoreCase = true)
-        val localLoss = result.localGwStats.packetLossPercent
-        val localLatency = if (result.localGwStats.isReachable) result.localGwStats.avgMs else result.gateway1Latency
-        val localStatusText = when {
-            !isLocalGwValid -> Translations.tr("statusProblem", language)
-            result.localGwStats.isReachable && localLoss < 5.0 -> Translations.tr("statusGood", language)
-            result.localGwStats.isReachable -> Translations.tr("statusProblem", language)
-            localLatency > 0 -> Translations.tr("statusGood", language)
-            else -> Translations.tr("statusProblem", language)
+        val nodesToDisplay = if (result.nodes.isNotEmpty()) {
+            result.nodes
+        } else {
+            listOf(
+                DiagnosticWorkflowNode(
+                    stepNumber = 1,
+                    title = "আপনার ডিভাইস",
+                    ip = deviceIp.ifBlank { "127.0.0.1" },
+                    latencyText = "0.0 ms",
+                    latencyMs = 0.0,
+                    packetLossPercent = 0.0,
+                    packetLossText = "0.0%",
+                    isReachable = true,
+                    statusText = "স্বাভাবিক",
+                    statusLevel = "green",
+                    iconType = "device"
+                ),
+                DiagnosticWorkflowNode(
+                    stepNumber = 2,
+                    title = "হোম ওয়াইফাই রাউটার",
+                    ip = result.gateway1.ifBlank { "192.168.0.1" },
+                    latencyText = if (result.localGwStats.isReachable) "${"%.1f".format(result.localGwStats.avgMs)} ms" else "অপেক্ষমান",
+                    latencyMs = if (result.localGwStats.isReachable) result.localGwStats.avgMs else null,
+                    packetLossPercent = result.localGwStats.packetLossPercent,
+                    packetLossText = if (result.localGwStats.isReachable) "${"%.1f".format(result.localGwStats.packetLossPercent)}%" else "0.0%",
+                    isReachable = result.localGwStats.isReachable,
+                    statusText = if (result.localGwStats.isReachable) "স্বাভাবিক" else "প্রস্তুত",
+                    statusLevel = if (result.localGwStats.isReachable) "green" else "gray",
+                    iconType = "router"
+                ),
+                DiagnosticWorkflowNode(
+                    stepNumber = 3,
+                    title = "পরবর্তি ডিভাইস",
+                    ip = "Unknown",
+                    latencyText = "অপেক্ষমান",
+                    packetLossText = "0.0%",
+                    statusText = "প্রস্তুত",
+                    statusLevel = "gray",
+                    iconType = "device_next"
+                ),
+                DiagnosticWorkflowNode(
+                    stepNumber = 4,
+                    title = "আপস্ট্রিম গেটওয়ে ১",
+                    ip = "Unknown",
+                    latencyText = "অপেক্ষমান",
+                    packetLossText = "0.0%",
+                    statusText = "প্রস্তুত",
+                    statusLevel = "gray",
+                    iconType = "gateway"
+                ),
+                DiagnosticWorkflowNode(
+                    stepNumber = 5,
+                    title = "আপস্ট্রিম গেটওয়ে ২",
+                    ip = "Unknown",
+                    latencyText = "অপেক্ষমান",
+                    packetLossText = "0.0%",
+                    statusText = "প্রস্তুত",
+                    statusLevel = "gray",
+                    iconType = "gateway"
+                ),
+                DiagnosticWorkflowNode(
+                    stepNumber = 6,
+                    title = "ইন্টারনেট",
+                    ip = "8.8.8.8",
+                    latencyText = "অপেক্ষমান",
+                    packetLossText = "0.0%",
+                    statusText = "প্রস্তুত",
+                    statusLevel = "gray",
+                    iconType = "internet"
+                )
+            )
         }
-        val localStatusLevel = if (localStatusText == Translations.tr("statusGood", language)) "green" else "red"
 
-        WorkflowHopCard(
-            stepNumber = 2,
-            title = Translations.tr("homeWifiRouter", language),
-            icon = Icons.Default.Router,
-            ip = if (isLocalGwValid) result.gateway1 else Translations.tr("statusUnknown", language),
-            latencyText = if (isLocalGwValid && (result.localGwStats.isReachable || localLatency > 0)) "${"%.1f".format(localLatency)} ms" else "Timeout",
-            latencyMs = if (isLocalGwValid && (result.localGwStats.isReachable || localLatency > 0)) localLatency else null,
-            packetLossText = if (isLocalGwValid) "${"%.1f".format(localLoss)}%" else "100.0%",
-            statusText = localStatusText,
-            statusLevel = localStatusLevel,
-            themeTint = Color(0xFF0D9488), // Teal/Cyan theme
-            themeBg = Color(0xFFCCFBF1)
-        )
-
-        WorkflowArrowConnector()
-
-        // 3. Upstream Gateway 1 (Hop 2)
-        val isUpstream1Confirmed = (!result.gateway2.isBlank() &&
-                !result.gateway2.equals("Unknown", ignoreCase = true) &&
-                result.gateway2 != "*") ||
-                (result.upstreamDiscovery.detectedIp.isNotBlank() &&
-                 !result.upstreamDiscovery.detectedIp.equals("Unknown", ignoreCase = true) &&
-                 result.upstreamDiscovery.detectedIp != "*")
-        val upstream1Ip = if (isUpstream1Confirmed) {
-            if (!result.gateway2.isBlank() && !result.gateway2.equals("Unknown", ignoreCase = true) && result.gateway2 != "*") {
-                result.gateway2
-            } else {
-                result.upstreamDiscovery.detectedIp
+        nodesToDisplay.forEachIndexed { index, node ->
+            if (index > 0) {
+                WorkflowArrowConnector()
             }
-        } else {
-            Translations.tr("statusUnknown", language)
+
+            val icon = when (node.iconType) {
+                "device" -> Icons.Default.Smartphone
+                "router" -> Icons.Default.Router
+                "device_next" -> Icons.Default.Public
+                "gateway" -> Icons.Default.Hub
+                "internet" -> Icons.Default.Cloud
+                else -> Icons.Default.Router
+            }
+
+            val (themeTint, themeBg) = when (node.iconType) {
+                "device" -> Color(0xFF0284C7) to Color(0xFFE0F2FE)
+                "router" -> Color(0xFF0D9488) to Color(0xFFCCFBF1)
+                "device_next" -> Color(0xFF2563EB) to Color(0xFFDBEAFE)
+                "gateway" -> Color(0xFF8B5CF6) to Color(0xFFF3E8FF)
+                "internet" -> Color(0xFF10B981) to Color(0xFFD1FAE5)
+                else -> Color(0xFF64748B) to Color(0xFFF1F5F9)
+            }
+
+            val isMiddleNode = node.stepNumber >= 3 && node.iconType != "internet" && node.title != "ইন্টারনেট"
+            val hasPartialLoss = isMiddleNode && node.packetLossPercent > 3.0 && node.packetLossPercent < 100.0
+            val effectiveStatusText = if (hasPartialLoss) "সমস্যা" else node.statusText
+            val effectiveStatusLevel = if (hasPartialLoss) "red" else node.statusLevel
+
+            WorkflowHopCard(
+                stepNumber = node.stepNumber,
+                title = node.title,
+                icon = icon,
+                ip = node.ip,
+                latencyText = node.latencyText,
+                latencyMs = node.latencyMs,
+                packetLossText = node.packetLossText,
+                statusText = effectiveStatusText,
+                statusLevel = effectiveStatusLevel,
+                themeTint = themeTint,
+                themeBg = themeBg
+            )
         }
-        val upstream1Stats = result.upstreamGwStats
-        val upstream1Loss = upstream1Stats?.packetLossPercent ?: 0.0
-        val upstream1Latency = if (upstream1Stats != null && upstream1Stats.isReachable) {
-            upstream1Stats.avgMs
-        } else if (result.gateway2Latency > 0) {
-            result.gateway2Latency
-        } else {
-            0.0
-        }
-
-        val upstream1StatusText = when {
-            result.isSkippedDueToRouterFailure -> Translations.tr("statusUnknown", language)
-            !isUpstream1Confirmed -> Translations.tr("statusUnknown", language)
-            upstream1Stats != null && !upstream1Stats.isReachable -> Translations.tr("statusProblem", language)
-            upstream1Loss > 5.0 -> Translations.tr("statusProblem", language)
-            upstream1Latency > 0 -> Translations.tr("statusGood", language)
-            isUpstream1Confirmed -> Translations.tr("statusGood", language)
-            else -> Translations.tr("statusUnknown", language)
-        }
-        val upstream1StatusLevel = when (upstream1StatusText) {
-            Translations.tr("statusGood", language) -> "green"
-            Translations.tr("statusProblem", language) -> "red"
-            else -> "yellow"
-        }
-
-        WorkflowHopCard(
-            stepNumber = 3,
-            title = Translations.tr("upstreamGateway1", language),
-            icon = Icons.Default.Public,
-            ip = upstream1Ip,
-            latencyText = if (isUpstream1Confirmed && upstream1Latency > 0) "${"%.1f".format(upstream1Latency)} ms" else if (isUpstream1Confirmed) "< 5 ms" else Translations.tr("statusUnknown", language),
-            latencyMs = if (isUpstream1Confirmed && upstream1Latency > 0) upstream1Latency else if (isUpstream1Confirmed) 4.0 else null,
-            packetLossText = if (isUpstream1Confirmed && upstream1Stats != null) "${"%.1f".format(upstream1Loss)}%" else if (isUpstream1Confirmed) "0.0%" else Translations.tr("statusUnknown", language),
-            statusText = upstream1StatusText,
-            statusLevel = upstream1StatusLevel,
-            themeTint = Color(0xFF6366F1), // Soft Purple/Indigo theme
-            themeBg = Color(0xFFEEF2FF)
-        )
-
-        WorkflowArrowConnector()
-
-        // 4. Upstream Gateway 2 (Hop 3)
-        val gw2Stats = result.upstreamGw2Stats
-        val isUpstream2Confirmed = gw2Stats != null && gw2Stats.host.isNotBlank() &&
-                !gw2Stats.host.equals("Unknown", ignoreCase = true) &&
-                gw2Stats.host != "*"
-        val upstream2Ip = if (isUpstream2Confirmed && gw2Stats != null) gw2Stats.host else Translations.tr("statusUnknown", language)
-        val upstream2Loss = gw2Stats?.packetLossPercent ?: 0.0
-        val upstream2Latency = if (gw2Stats != null && gw2Stats.isReachable) gw2Stats.avgMs else 0.0
-
-        val upstream2StatusText = when {
-            result.isSkippedDueToRouterFailure -> Translations.tr("statusUnknown", language)
-            !isUpstream2Confirmed -> Translations.tr("statusUnknown", language)
-            gw2Stats != null && !gw2Stats.isReachable -> Translations.tr("statusProblem", language)
-            upstream2Loss > 5.0 -> Translations.tr("statusProblem", language)
-            upstream2Latency > 0 -> Translations.tr("statusGood", language)
-            isUpstream2Confirmed -> Translations.tr("statusGood", language)
-            else -> Translations.tr("statusUnknown", language)
-        }
-        val upstream2StatusLevel = when (upstream2StatusText) {
-            Translations.tr("statusGood", language) -> "green"
-            Translations.tr("statusProblem", language) -> "red"
-            else -> "yellow"
-        }
-
-        WorkflowHopCard(
-            stepNumber = 4,
-            title = Translations.tr("upstreamGateway2", language),
-            icon = Icons.Default.Hub,
-            ip = upstream2Ip,
-            latencyText = if (isUpstream2Confirmed && upstream2Latency > 0) "${"%.1f".format(upstream2Latency)} ms" else if (isUpstream2Confirmed) "< 10 ms" else Translations.tr("statusUnknown", language),
-            latencyMs = if (isUpstream2Confirmed && upstream2Latency > 0) upstream2Latency else if (isUpstream2Confirmed) 8.0 else null,
-            packetLossText = if (isUpstream2Confirmed && gw2Stats != null) "${"%.1f".format(upstream2Loss)}%" else if (isUpstream2Confirmed) "0.0%" else Translations.tr("statusUnknown", language),
-            statusText = upstream2StatusText,
-            statusLevel = upstream2StatusLevel,
-            themeTint = Color(0xFF8B5CF6), // Purple/Violet theme
-            themeBg = Color(0xFFF3E8FF)
-        )
-
-        WorkflowArrowConnector()
-
-        // 5. Internet
-        val targetStats = result.internetTargetStats
-        val internetReachable = targetStats.isReachable || result.secondaryTargetStats.isReachable
-        val internetLoss = targetStats.packetLossPercent
-        val internetLatency = if (targetStats.isReachable) targetStats.avgMs else result.secondaryTargetStats.avgMs
-        val internetStatusText = when {
-            result.isSkippedDueToRouterFailure -> Translations.tr("statusUnknown", language)
-            internetReachable && internetLoss < 5.0 -> Translations.tr("statusGood", language)
-            internetReachable -> Translations.tr("statusProblem", language)
-            else -> Translations.tr("statusProblem", language)
-        }
-        val internetStatusLevel = when {
-            result.isSkippedDueToRouterFailure -> "yellow"
-            internetStatusText == Translations.tr("statusGood", language) -> "green"
-            else -> "red"
-        }
-
-        WorkflowHopCard(
-            stepNumber = 5,
-            title = Translations.tr("internet", language),
-            icon = Icons.Default.Cloud,
-            ip = if (targetStats.host.isNotBlank()) targetStats.host else "8.8.8.8",
-            latencyText = if (internetReachable) "${"%.1f".format(internetLatency)} ms" else "Timeout",
-            latencyMs = if (internetReachable) internetLatency else null,
-            packetLossText = "${"%.1f".format(internetLoss)}%",
-            statusText = internetStatusText,
-            statusLevel = internetStatusLevel,
-            themeTint = Color(0xFF10B981), // Green theme
-            themeBg = Color(0xFFD1FAE5)
-        )
     }
 }
 
@@ -1584,8 +1739,15 @@ private fun resolvePingLatencyColor(latencyText: String, latencyMs: Double? = nu
     val green = Color(0xFF10B981) // Green (#10B981 / #4CAF50)
     val amber = Color(0xFFF59E0B) // Amber/Orange (#F59E0B)
     val red = Color(0xFFEF4444)   // Red (#EF4444)
+    val gray = Color(0xFF94A3B8)
 
     val lower = latencyText.lowercase().trim()
+    if (lower.contains("icmp") || lower.contains("বন্ধ") || lower.contains("block")) {
+        return amber
+    }
+    if (lower.contains("ready") || lower.contains("অপেক্ষমান") || lower.contains("প্রস্তুত")) {
+        return gray
+    }
     if (lower.contains("timeout") || lower.contains("fail") || lower.contains("problem") || lower.contains("unknown") || lower.contains("অজানা")) {
         return red
     }
@@ -1731,8 +1893,10 @@ private fun WorkflowHopCard(
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
                         color = when {
+                            statusLevel == "amber" || statusText.contains("ICMP") || statusText.contains("বন্ধ") -> Color(0xFFD97706)
+                            statusLevel == "gray" -> AppColors.inkMuted
                             packetLossText.contains("100") || packetLossText.contains("Unknown") || packetLossText.contains("অজানা") -> AppColors.red
-                            (packetLossText.replace("%", "").trim().toDoubleOrNull() ?: 0.0) > 5.0 -> AppColors.red
+                            (packetLossText.replace("%", "").trim().toDoubleOrNull() ?: 0.0) > 3.0 -> AppColors.red
                             else -> AppColors.green
                         }
                     )
@@ -1975,9 +2139,9 @@ private fun InitialInfographicPreviewCard(
                     )
                     Text(
                         text = if (language == AppLanguage.BN)
-                            "৫-নোড নেটওয়ার্ক পাথ বিশ্লেষণ ও ডায়াগনস্টিক"
+                            "ডায়নামিক নেটওয়ার্ক পাথ বিশ্লেষণ ও ডায়াগনস্টিক"
                         else
-                            "5-Node Network Path Analysis & Diagnostics",
+                            "Dynamic Network Path Analysis & Diagnostics",
                         fontSize = 12.sp,
                         color = AppColors.inkMuted
                     )

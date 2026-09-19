@@ -14,6 +14,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlin.math.abs
@@ -223,14 +224,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _isDiagnosticLoading.value = true
             _diagnosticProgress.value = 0
+            _diagnosticResult.value = DiagnosticResult(mode = mode)
             val res = diagnosticRepo.runDiagnostic(
                 context = getApplication(),
                 mode = mode,
                 onProgress = { percent ->
-                    _diagnosticProgress.value = percent
+                    _diagnosticProgress.update { current -> maxOf(current, percent) }
                 }
             )
-            _diagnosticResult.value = res
+            _diagnosticResult.update { res }
             _diagnosticProgress.value = 100
             _isDiagnosticLoading.value = false
         }

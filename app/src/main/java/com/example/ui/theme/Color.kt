@@ -50,10 +50,15 @@ fun getStatusColors(level: String): StatusPalette {
             soft = AppColors.greenSoft,
             border = AppColors.greenSoftBorder
         )
-        "yellow", "fair", "playable", "slow" -> StatusPalette(
-            main = AppColors.yellow,
-            soft = AppColors.yellowSoft,
-            border = AppColors.yellowSoftBorder
+        "yellow", "fair", "playable", "slow", "amber" -> StatusPalette(
+            main = Color(0xFFD97706),
+            soft = Color(0xFFFEF3C7),
+            border = Color(0xFFFDE68A)
+        )
+        "gray", "grey", "neutral" -> StatusPalette(
+            main = AppColors.inkMuted,
+            soft = AppColors.surfaceAlt,
+            border = AppColors.border
         )
         else -> StatusPalette(
             main = AppColors.red,

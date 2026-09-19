@@ -524,15 +524,20 @@ object NetworkUtils {
 
     /**
      * Executes real traceroute path discovery across incrementing probe TTLs.
-     * Uses 2000 ms timeout for Hop 2 and Hop 3 with 3 probe packets per hop.
+     * In discovery mode, uses 1 probe packet per TTL for rapid discovery, stopping immediately when target is reached.
      */
-    suspend fun executeTraceroute(target: String = "8.8.8.8", maxHops: Int = 12): List<DiagnosticHop> = withContext(Dispatchers.IO) {
+    suspend fun executeTraceroute(
+        target: String = "8.8.8.8",
+        maxHops: Int = 12,
+        probeCount: Int = 1,
+        fastDiscovery: Boolean = false
+    ): List<DiagnosticHop> = withContext(Dispatchers.IO) {
         val hops = mutableListOf<DiagnosticHop>()
         var consecutiveTimeouts = 0
 
         for (ttl in 1..maxHops) {
-            val hopTimeout = if (ttl in 2..3) 2000 else 1000
-            val probe = probeTracerouteHop(target, probeTtl = ttl, timeoutMs = hopTimeout, probeCount = 3)
+            val hopTimeout = if (ttl in 2..3) (if (fastDiscovery) 1000 else 2000) else 1000
+            val probe = probeTracerouteHop(target, probeTtl = ttl, timeoutMs = hopTimeout, probeCount = probeCount)
 
             if (probe.ip == "*") {
                 consecutiveTimeouts++
@@ -545,7 +550,7 @@ object NetworkUtils {
                 consecutiveTimeouts = 0
                 var latency = probe.latencyMs
                 // If probe didn't capture precise latency or was slow, try quick direct measurement
-                if (latency <= 0 || latency > 500) {
+                if (!fastDiscovery && (latency <= 0 || latency > 500)) {
                     val direct = pingHostIcmpOrSocket(probe.ip, timeoutMs = if (ttl in 2..3) 2000 else 1000)
                     if (direct > 0) {
                         latency = Math.round(direct * 10.0) / 10.0
